@@ -6,46 +6,24 @@ package org.noise_planet.noisemodelling.wps.NoiseModelling
 
 import geoserver.GeoServer
 import geoserver.catalog.Store
-
-import org.h2gis.api.ProgressVisitor
 import org.geotools.jdbc.JDBCDataStore
 import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.TableLocation
-import org.locationtech.jts.geom.Coordinate
-import org.locationtech.jts.geom.Envelope
 import org.noise_planet.noisemodelling.emission.EvaluateRoadSourceCnossos
 import org.noise_planet.noisemodelling.emission.RSParametersCnossos
-import org.noise_planet.noisemodelling.propagation.ComputeRays
-import org.noise_planet.noisemodelling.propagation.FastObstructionTest
-import org.noise_planet.noisemodelling.propagation.PropagationProcessData
 import org.noise_planet.noisemodelling.propagation.PropagationProcessPathData
-
-import javax.xml.stream.XMLStreamException
-import org.cts.crs.CRSException
+import utilities.*
 
 import java.sql.Connection
-import java.sql.DriverManager
-import java.sql.ResultSet
-import java.sql.Statement
 import java.sql.PreparedStatement
 import groovy.sql.Sql
 import org.h2gis.utilities.SFSUtilities
-import org.h2gis.api.EmptyProgressVisitor
-import org.noisemodellingwps.utilities.WpsConnectionWrapper
 import org.h2gis.utilities.wrapper.*
-
-import org.noise_planet.noisemodelling.propagation.*
-import org.noise_planet.noisemodelling.propagation.jdbc.PointNoiseMap
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
-
 import org.h2gis.utilities.SpatialResultSet
 import org.locationtech.jts.geom.Geometry
 
 
 import java.sql.SQLException
-import java.util.ArrayList
-import java.util.List
 
 title = 'Compute Road Emission'
 description = 'Compute Road Emission Noise Map from Estimated Annual average daily flows (TMJA) estimates. '
@@ -55,11 +33,7 @@ inputs = [databaseName      : [name: 'Name of the database', title: 'Name of the
 
 outputs = [result: [name: 'result', title: 'Result', type: String.class]]
 
-class Globals {
-    static double[] wjSourcesD = new double[PropagationProcessPathData.freq_lvl.size()]
-    static double[] wjSourcesE =new double[PropagationProcessPathData.freq_lvl.size()]
-    static double[] wjSourcesN = new double[PropagationProcessPathData.freq_lvl.size()]
-}
+
 
 def static Connection openPostgreSQLDataStoreConnection(String dbName) {
     Store store = new GeoServer().catalog.getStore(dbName)
@@ -142,18 +116,18 @@ def run(input) {
             while (rs.next()) {
                 System.println(rs)
                 Geometry geo = rs.getGeometry()
-                computeLw(rs.getLong(pkIndex), geo, rs)
-                System.println(Globals.wjSourcesD[0])
+                def results=computeLw(rs.getLong(pkIndex), geo, rs)
+
                 ps.addBatch(rs.getLong(pkIndex) as Integer,geo as Geometry,
-                        Globals.wjSourcesD[0] as Double, Globals.wjSourcesD[1] as Double, Globals.wjSourcesD[2] as Double,
-                        Globals.wjSourcesD[3] as Double, Globals.wjSourcesD[4]as Double, Globals.wjSourcesD[5] as Double,
-                        Globals.wjSourcesD[6]as Double, Globals.wjSourcesD[7] as Double,
-                        Globals.wjSourcesE[0] as Double, Globals.wjSourcesE[1] as Double, Globals.wjSourcesE[2] as Double,
-                        Globals.wjSourcesE[3] as Double, Globals.wjSourcesE[4]as Double, Globals.wjSourcesE[5] as Double,
-                        Globals.wjSourcesE[6]as Double, Globals.wjSourcesE[7] as Double,
-                        Globals.wjSourcesN[0] as Double, Globals.wjSourcesN[1] as Double, Globals.wjSourcesN[2] as Double,
-                        Globals.wjSourcesN[3] as Double, Globals.wjSourcesN[4]as Double, Globals.wjSourcesN[5] as Double,
-                        Globals.wjSourcesN[6]as Double, Globals.wjSourcesN[7] as Double)
+                        results[0][0] as Double, results[0][1] as Double, results[0][2] as Double,
+                        results[0][3] as Double, results[0][4]as Double, results[0][5] as Double,
+                        results[0][6]as Double, results[0][7] as Double,
+                        results[1][0] as Double, results[1][1] as Double, results[1][2] as Double,
+                        results[1][3] as Double, results[1][4]as Double, results[1][5] as Double,
+                        results[1][6]as Double, results[1][7] as Double,
+                        results[2][0] as Double, results[2][1] as Double, results[2][2] as Double,
+                        results[2][3] as Double, results[2][4]as Double, results[2][5] as Double,
+                        results[2][6]as Double, results[2][7] as Double)
             }
         }
 
@@ -168,7 +142,7 @@ def run(input) {
 
 }
 
-static void computeLw(Long pk, Geometry geom, SpatialResultSet rs) throws SQLException {
+static double[][] computeLw(Long pk, Geometry geom, SpatialResultSet rs) throws SQLException {
 
     def lv_hourly_distribution = [0.56, 0.3, 0.21, 0.26, 0.69, 1.8, 4.29, 7.56, 7.09, 5.5, 4.96, 5.04,
                                   5.8, 6.08, 6.23, 6.67, 7.84, 8.01, 7.12, 5.44, 3.45, 2.26, 1.72, 1.12];
@@ -310,7 +284,5 @@ static void computeLw(Long pk, Geometry geom, SpatialResultSet rs) throws SQLExc
         ln[i] = (ln[i] / nightHours.length)
     }
 
-    Globals.wjSourcesD = ld
-    Globals.wjSourcesE = le
-    Globals.wjSourcesN = ln
+    return [ld,le,ln]
 }
