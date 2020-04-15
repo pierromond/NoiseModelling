@@ -37,7 +37,7 @@ import java.sql.Statement
 title = 'Change or set SRID'
 description = 'Transforms table from its original coordinate reference system (CRS) to the CRS specified by Spatial Reference Identifier (SRID). </br> If the table does not have an associated SRID, the new SRID is associated with the table.'
 
-inputs = [newSRID  : [name: 'Projection identifier', title: 'Projection identifier', description: 'New projection identifier (also called SRID) of your table. It should be an EPSG code, a integer with 4 or 5 digits (ex: 3857 is Web Mercator projection). </br>  All coordinates will be projected from the specified EPSG to WGS84 coordinates. </br> This entry is optional because many formats already include the projection and you can also import files without geometry attributes.'],
+inputs = [newSRID  : [name: 'Projection identifier', title: 'Projection identifier', description: 'New projection identifier (also called SRID) of your table. It should be an EPSG code, a integer with 4 or 5 digits (ex: 3857 is Web Mercator projection). </br>  All coordinates will be projected from the specified EPSG to WGS84 coordinates. </br> This entry is optional because many formats already include the projection and you can also import files without geometry attributes.', type: Integer.class],
           tableName: [name: 'Name of the table', title: 'Name of the table', description: 'Name of the table you want to display.', type: String.class]
 ]
 
@@ -51,6 +51,21 @@ static Connection openGeoserverDataStoreConnection(String dbName) {
     Store store = new GeoServer().catalog.getStore(dbName)
     JDBCDataStore jdbcDataStore = (JDBCDataStore) store.getDataStoreInfo().getDataStore(null)
     return jdbcDataStore.getDataSource().getConnection()
+}
+
+
+def run(input) {
+
+    // Get name of the database
+    // by default an embedded h2gis database is created
+    // Advanced user can replace this database for a postGis or h2Gis server database.
+    String dbName = "h2gisdb"
+
+    // Open connection
+    openGeoserverDataStoreConnection(dbName).withCloseable {
+        Connection connection ->
+            return [result: exec(connection, input)]
+    }
 }
 
 def exec(Connection connection, input) {
@@ -133,19 +148,4 @@ def exec(Connection connection, input) {
 
     // print to WPS Builder
     return resultString
-}
-
-
-def run(input) {
-
-    // Get name of the database
-    // by default an embedded h2gis database is created
-    // Advanced user can replace this database for a postGis or h2Gis server database.
-    String dbName = "h2gisdb"
-
-    // Open connection
-    openGeoserverDataStoreConnection(dbName).withCloseable {
-        Connection connection ->
-            return [result: exec(connection, input)]
-    }
 }
