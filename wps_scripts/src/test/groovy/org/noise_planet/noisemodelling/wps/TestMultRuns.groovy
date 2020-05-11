@@ -26,13 +26,14 @@ import org.junit.Test
 import org.noise_planet.noisemodelling.wps.Database_Manager.Add_Primary_Key
 import org.noise_planet.noisemodelling.wps.Database_Manager.Table_Visualization_Data
 import org.noise_planet.noisemodelling.wps.Experimental.Get_Rayz
-import org.noise_planet.noisemodelling.wps.Experimental.Multi_Runs
+//import org.noise_planet.noisemodelling.wps.Experimental.Multi_Runs
+import org.noise_planet.noisemodelling.wps.Experimental.Multi_Runs_modifs
 
 class TestMultRuns extends JdbcTestCase  {
 
     void testMultiRun() {
 
-        GeoJsonRead.readGeoJson(connection, TestMultRuns.class.getResource("multirun/buildings.geojson").getPath())
+    /*    GeoJsonRead.readGeoJson(connection, TestMultRuns.class.getResource("multirun/buildings.geojson").getPath())
         GeoJsonRead.readGeoJson(connection, TestMultRuns.class.getResource("multirun/receivers.geojson").getPath())
         GeoJsonRead.readGeoJson(connection, TestMultRuns.class.getResource("multirun/sources.geojson").getPath())
 
@@ -51,15 +52,15 @@ class TestMultRuns extends JdbcTestCase  {
                  "tableReceivers": "RECEIVERS",
                  "exportPath"   : TestMultRuns.class.getResource("multirun/").getPath()])
 
-
-        new Multi_Runs().exec(connection,
-                ["workingDir":TestMultRuns.class.getResource("multirun/").getPath()])
+*/
+        new Multi_Runs_modifs().exec(connection,
+                ["workingDir":TestMultRuns.class.getResource("mRAntoine/").getPath()])
 
 
       String res =   new Table_Visualization_Data().exec(connection,
                 ["tableName": "MultiRunsResults_geom"])
 
-        new Get_Rayz().exec(connection,
+    /*    new Get_Rayz().exec(connection,
                 ["tableBuilding"   : "BUILDINGS",
                  "roadsTableName"   : "SOURCES",
                  "tableReceivers": "RECEIVERS",
@@ -73,7 +74,7 @@ class TestMultRuns extends JdbcTestCase  {
                 ["tableName": "MultiRunsResults_geom"])
 
 
-
+*/
         //assertEquals(res, res3)
     }
 
