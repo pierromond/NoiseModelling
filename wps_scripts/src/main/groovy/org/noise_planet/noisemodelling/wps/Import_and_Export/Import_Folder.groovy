@@ -111,7 +111,7 @@ def exec(Connection connection, input) {
             String outputTableName = fileName.toUpperCase()
 
             // Drop the table if already exists
-            String dropOutputTable = "drop table if exists " + outputTableName
+            String dropOutputTable = "drop table if exists \"" + outputTableName + "\""
             stmt.execute(dropOutputTable)
 
             switch (ext) {

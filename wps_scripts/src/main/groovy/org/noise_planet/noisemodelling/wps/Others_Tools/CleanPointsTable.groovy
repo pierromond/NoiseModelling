@@ -27,8 +27,6 @@ import geoserver.catalog.Store
 import groovy.sql.Sql
 import groovy.time.TimeCategory
 import org.geotools.jdbc.JDBCDataStore
-import org.h2gis.utilities.JDBCUtilities
-import org.h2gis.utilities.wrapper.ConnectionWrapper
 
 import java.sql.Connection
 
@@ -41,6 +39,13 @@ inputs = [tableBuilding     : [name       : 'Buildings table name', title: 'Buil
                                        '<br>  The table shall contain : </br>' +
                                        '- <b> THE_GEOM </b> : the 2D geometry of the building (POLYGON or MULTIPOLYGON). </br>' +
                                        '- <b> HEIGHT </b> : the height of the building (FLOAT)',
+                               type       : String.class],
+          points_table_name    : [name: 'Points table name', title: 'Points table name',
+                               description: '<b>Name of the Receivers table.</b></br>  ' +
+                                       '</br>  The table shall contain : </br> ' +
+                                       '- <b> PK </b> : an identifier. It shall be a primary key (INTEGER, PRIMARY KEY). </br> ' +
+                                       '- <b> THE_GEOM </b> : the 3D geometry of the sources (POINT, MULTIPOINT).</br> ' +
+                                       '</br> </br> <b> This table can be generated from the WPS Blocks in the "Receivers" folder. </b>',
                                type       : String.class]]
 
 outputs = [result: [name: 'Result output string', title: 'Result output string', description: 'This type of result does not allow the blocks to be linked together.', type: String.class]]
@@ -91,6 +96,9 @@ def exec(Connection connection, input) {
     tableName = building_table_name.toUpperCase()
 
 
+    String points_table_name = input['points_table_name']
+    // do it case-insensitive
+    points_table_name = points_table_name.toUpperCase()
 
     // -------------------------
     // Initialize some variables
@@ -99,32 +107,11 @@ def exec(Connection connection, input) {
    
    // Create a sql connection to interact with the database in SQL
     Sql sql = new Sql(connection)
-    connection = new ConnectionWrapper(connection)
 
+    System.out.println("Delete receivers inside buildings")
 
-sql.execute('drop table if exists buildings_temp;'+
-            'create table buildings_temp as select ST_MAKEVALID(ST_precisionreducer(ST_SIMPLIFYPRESERVETOPOLOGY(THE_GEOM,0.1),1)) THE_GEOM, PK, HEIGHT from buildings  WHERE ST_Perimeter(THE_GEOM)<1000;')
-
-
-    System.out.println('Make valid ok')
-
-    sql.execute("ALTER TABLE buildings_temp ALTER COLUMN PK INT NOT NULL;")
-    sql.execute("ALTER TABLE buildings_temp ADD PRIMARY KEY (PK); ")
-    sql.execute('CREATE SPATIAL INDEX IF NOT EXISTS BUILDINGS_INDEX ON buildings_temp(the_geom);'+
-            'drop table if exists tmp_relation_buildings;'+
-            'create table tmp_relation_buildings as select s1.PK as PK_BUILDING, S2.PK as PK2_BUILDING FROM buildings_temp S1, buildings_temp S2 WHERE ST_AREA(S1.THE_GEOM) < ST_AREA(S2.THE_GEOM) AND S1.THE_GEOM && S2.THE_GEOM AND ST_DISTANCE(S1.THE_GEOM, S2.THE_GEOM) <= 0.1;')
-
-    System.out.println('Intersection founded')
-
-    sql.execute("CREATE INDEX ON tmp_relation_buildings(PK_BUILDING);"+
-            "drop table if exists tmp_buildings_truncated;" +
-            "create table tmp_buildings_truncated as select PK_BUILDING, ST_DIFFERENCE(s1.the_geom,  ST_BUFFER(ST_ACCUM(s2.the_geom), 0.1, 'join=mitre')) the_geom, s1.HEIGHT from tmp_relation_buildings r, buildings_temp s1, buildings_temp s2 WHERE PK_BUILDING = S1.PK  AND PK2_BUILDING = S2.PK   GROUP BY PK_BUILDING;")
-
-    System.out.println('Intersection tmp_buildings_truncated')
-    sql.execute("DROP TABLE IF EXISTS BUILDINGS;")
-    sql.execute("create table BUILDINGS(PK INTEGER PRIMARY KEY, THE_GEOM GEOMETRY, HEIGHT FLOAT)  as select s.PK, s.the_geom, s.HEIGHT from  BUILDINGS_TEMP s where PK not in (select PK_BUILDING from tmp_buildings_truncated) UNION ALL select PK_BUILDING, the_geom, HEIGHT from tmp_buildings_truncated WHERE NOT st_isempty(the_geom);")
-
-    sql.execute("drop table if exists tmp_buildings_truncated;")
+    sql.execute("Create spatial index on " + building_table_name + "(the_geom);")
+    sql.execute("delete from " + points_table_name + " g where exists (select 1 from " + building_table_name + " b where ST_Z(g.the_geom) < b.HEIGHT and g.the_geom && b.the_geom and ST_INTERSECTS(g.the_geom, b.the_geom) and ST_distance(b.the_geom, g.the_geom) < 1 limit 1);")
 
     resultString = resultString + "Calculation Done !"
 
