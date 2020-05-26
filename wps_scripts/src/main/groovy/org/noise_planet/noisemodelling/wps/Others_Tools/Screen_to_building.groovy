@@ -51,8 +51,6 @@ inputs = [tableBuilding     : [name       : 'Buildings table name', title: 'Buil
                                        '- <b> THE_GEOM </b> : the 2D geometry of the screens (POLYGON or MULTIPOLYGON). </br>' +
                                        '- <b> HEIGHT </b> : the height of the screens (FLOAT)',  type : String.class]]
 
-outputs = [tableNameCreated: [name: 'tableNameCreated', title: 'tableNameCreated', type: String.class]]
-
 outputs = [result: [name: 'Result output string', title: 'Result output string', description: 'This type of result does not allow the blocks to be linked together.', type: String.class]]
 
 // Open Connection to Geoserver
