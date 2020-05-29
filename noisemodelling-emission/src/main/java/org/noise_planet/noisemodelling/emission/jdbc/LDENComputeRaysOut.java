@@ -35,7 +35,8 @@ public class LDENComputeRaysOut extends ComputeRaysOut {
         }
 
         void processAndPushResult(long receiverPK, List<double[]> wjSources, ConcurrentLinkedDeque<VerticeSL> result) {
-            double[] levels = new double[PropagationProcessPathData.freq_lvl.size()];
+            PropagationProcessPathData propagationProcessPathData = new PropagationProcessPathData();
+            double[] levels = new double[propagationProcessPathData.getFreq_lvl().size()];
             for (VerticeSL lvl : receiverAttenuationLevels) {
                 levels = ComputeRays.sumArray(levels,
                         ComputeRays.dbaToW(ComputeRays.sumArray(ComputeRays.wToDba(wjSources.get((int) lvl.sourceId)), lvl.value)));

@@ -121,13 +121,15 @@ public class LDENPointNoiseMapFactory implements PointNoiseMap.PropagationProces
         LDENComputeRaysOut.LdenData ldenData;
         double[] a_weighting;
 
+        PropagationProcessPathData propagationProcessPathData = new PropagationProcessPathData();
+
         public TableWriter(Connection connection, LDENConfig ldenConfig, LDENComputeRaysOut.LdenData ldenData) {
             this.connection = connection;
             this.ldenConfig = ldenConfig;
             this.ldenData = ldenData;
-            a_weighting = new double[PropagationProcessPathData.freq_lvl_a_weighting.size()];
+            a_weighting = new double[propagationProcessPathData.freq_lvl_a_weighting.size()];
             for(int idfreq = 0; idfreq < a_weighting.length; idfreq++) {
-                a_weighting[idfreq] = PropagationProcessPathData.freq_lvl_a_weighting.get(idfreq);
+                a_weighting[idfreq] = propagationProcessPathData.freq_lvl_a_weighting.get(idfreq);
             }
         }
 
@@ -144,7 +146,7 @@ public class LDENPointNoiseMapFactory implements PointNoiseMap.PropagationProces
             if(!ldenConfig.mergeSources) {
                 query.append(", ?"); // ID_SOURCE
             }
-            for(int idfreq=0; idfreq < PropagationProcessPathData.freq_lvl.size(); idfreq++) {
+            for(int idfreq=0; idfreq < propagationProcessPathData.getFreq_lvl().size(); idfreq++) {
                 query.append(", ?"); // freq value
             }
             query.append(", ?, ?);"); // laeq, leq
@@ -158,7 +160,7 @@ public class LDENPointNoiseMapFactory implements PointNoiseMap.PropagationProces
                 if(!ldenConfig.mergeSources) {
                     ps.setLong(parameterIndex++, row.sourceId);
                 }
-                for(int idfreq=0;idfreq < PropagationProcessPathData.freq_lvl.size(); idfreq++) {
+                for(int idfreq=0;idfreq < propagationProcessPathData.getFreq_lvl().size(); idfreq++) {
                     Double value = row.value[idfreq];
                     if(!Double.isFinite(value)) {
                         value = -99.0;
@@ -194,9 +196,10 @@ public class LDENPointNoiseMapFactory implements PointNoiseMap.PropagationProces
             } else {
                 sb.append(" (IDRECEIVER serial");
             }
-            for (int idfreq = 0; idfreq < PropagationProcessPathData.freq_lvl.size(); idfreq++) {
+            PropagationProcessPathData propagationProcessPathData = new PropagationProcessPathData();
+            for (int idfreq = 0; idfreq < propagationProcessPathData.getFreq_lvl().size(); idfreq++) {
                 sb.append(", HZ");
-                sb.append(PropagationProcessPathData.freq_lvl.get(idfreq));
+                sb.append(propagationProcessPathData.getFreq_lvl().get(idfreq));
                 sb.append(" numeric(5, 2)");
             }
             sb.append(", LAEQ numeric(5, 2), LEQ numeric(5, 2)");

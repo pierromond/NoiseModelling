@@ -95,7 +95,8 @@ public class LDENPropagationProcessData extends PropagationProcessData {
                 sourceFields.put(fieldName.toUpperCase(), fieldId++);
             }
         }
-        double[] lvl = new double[PropagationProcessPathData.freq_lvl.size()];
+        PropagationProcessPathData propagationProcessPathData = new PropagationProcessPathData();
+        double[] lvl = new double[propagationProcessPathData.getFreq_lvl().size()];
         // Set default values
         double tv = 0; // old format "total vehicles"
         double hv = 0; // old format "heavy vehicles"
@@ -185,7 +186,7 @@ public class LDENPropagationProcessData extends PropagationProcessData {
         }
         // Compute emission
         int idFreq = 0;
-        for (int freq : PropagationProcessPathData.freq_lvl) {
+        for (int freq : propagationProcessPathData.getFreq_lvl()) {
             RSParametersCnossos rsParametersCnossos = new RSParametersCnossos(lv_speed, mv_speed, hgv_speed, wav_speed,
                     wbv_speed,lvPerHour, mvPerHour, hgvPerHour, wavPerHour, wbvPerHour, freq, temperature,
                     roadSurface, tsStud, pmStud, junctionDistance, junctionType);
@@ -198,32 +199,33 @@ public class LDENPropagationProcessData extends PropagationProcessData {
 
     public double[][] computeLw(SpatialResultSet rs) throws SQLException {
 
+        PropagationProcessPathData propagationProcessPathData = new PropagationProcessPathData();
         // Compute day average level
-        double[] ld = new double[PropagationProcessPathData.freq_lvl.size()];
-        double[] le = new double[PropagationProcessPathData.freq_lvl.size()];
-        double[] ln = new double[PropagationProcessPathData.freq_lvl.size()];
-        double[] lden = new double[PropagationProcessPathData.freq_lvl.size()];
+        double[] ld = new double[propagationProcessPathData.getFreq_lvl().size()];
+        double[] le = new double[propagationProcessPathData.getFreq_lvl().size()];
+        double[] ln = new double[propagationProcessPathData.getFreq_lvl().size()];
+        double[] lden = new double[propagationProcessPathData.getFreq_lvl().size()];
 
         if (ldenConfig.input_mode == LDENConfig.INPUT_MODE.INPUT_MODE_PROBA) {
             double val = ComputeRays.dbaToW(90.0);
-            for(int idfreq = 0; idfreq < PropagationProcessPathData.freq_lvl.size(); idfreq++) {
+            for(int idfreq = 0; idfreq < propagationProcessPathData.getFreq_lvl().size(); idfreq++) {
                 ld[idfreq] = ComputeRays.dbaToW(val);
                 le[idfreq] = ComputeRays.dbaToW(val);
                 ln[idfreq] = ComputeRays.dbaToW(val);
             }
         } else if (ldenConfig.input_mode == LDENConfig.INPUT_MODE.INPUT_MODE_LW_DEN) {
             // Read average 24h traffic
-            for (int idfreq = 0; idfreq < PropagationProcessPathData.freq_lvl.size(); idfreq++) {
+            for (int idfreq = 0; idfreq < propagationProcessPathData.getFreq_lvl().size(); idfreq++) {
                 ld[idfreq] = ComputeRays.dbaToW(rs.getDouble(lwFrequencyPrepend + "D" +
-                        PropagationProcessPathData.freq_lvl.get(idfreq)));
+                        propagationProcessPathData.getFreq_lvl().get(idfreq)));
             }
-            for (int idfreq = 0; idfreq < PropagationProcessPathData.freq_lvl.size(); idfreq++) {
+            for (int idfreq = 0; idfreq < propagationProcessPathData.getFreq_lvl().size(); idfreq++) {
                 le[idfreq] = ComputeRays.dbaToW(rs.getDouble(lwFrequencyPrepend + "E" +
-                        PropagationProcessPathData.freq_lvl.get(idfreq)));
+                        propagationProcessPathData.getFreq_lvl().get(idfreq)));
             }
-            for (int idfreq = 0; idfreq < PropagationProcessPathData.freq_lvl.size(); idfreq++) {
+            for (int idfreq = 0; idfreq < propagationProcessPathData.getFreq_lvl().size(); idfreq++) {
                 ln[idfreq] = ComputeRays.dbaToW(rs.getDouble(lwFrequencyPrepend + "N" +
-                        PropagationProcessPathData.freq_lvl.get(idfreq)));
+                        propagationProcessPathData.getFreq_lvl().get(idfreq)));
             }
         } else if(ldenConfig.input_mode == LDENConfig.INPUT_MODE.INPUT_MODE_TRAFFIC_FLOW) {
             // Extract road slope
@@ -255,7 +257,7 @@ public class LDENPropagationProcessData extends PropagationProcessData {
         }
 
         // Combine day evening night sound levels
-        for (int idfreq = 0; idfreq < PropagationProcessPathData.freq_lvl.size(); idfreq++) {
+        for (int idfreq = 0; idfreq < propagationProcessPathData.getFreq_lvl().size(); idfreq++) {
             lden[idfreq] = (12 * ld[idfreq] + 4 * ComputeRays.dbaToW(ComputeRays.wToDba(le[idfreq]) + 5) + 8 * ComputeRays.dbaToW(ComputeRays.wToDba(ln[idfreq]) + 10)) / 24.0;
         }
 
