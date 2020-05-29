@@ -52,7 +52,7 @@ public class AtmosphericAttenuationTest {
         PropagationProcessPathData propagationProcessPathData = new PropagationProcessPathData();
 
         for(int idfreq=0;idfreq< expected.length;idfreq++) {
-            double freq = propagationProcessPathData.getFreq_lvl().get(idfreq);
+            double freq = propagationProcessPathData.getFreq_lvl_exact().get(idfreq);
             double coefAttAtmos = PropagationProcessPathData.getCoefAttAtmos(freq, humidity,pressure,temperature+PropagationProcessPathData.K_0);
             assertEquals(expected[idfreq], coefAttAtmos, EPSILON);
         }
@@ -67,7 +67,7 @@ public class AtmosphericAttenuationTest {
         PropagationProcessPathData propagationProcessPathData = new PropagationProcessPathData();
 
         for(int idfreq=0;idfreq< expected.length;idfreq++) {
-            double freq = propagationProcessPathData.getFreq_lvl().get(idfreq);
+            double freq = propagationProcessPathData.getFreq_lvl_exact().get(idfreq);
             double coefAttAtmos = PropagationProcessPathData.getCoefAttAtmos(freq, humidity,pressure,temperature+PropagationProcessPathData.K_0);
             assertEquals(expected[idfreq], coefAttAtmos, EPSILON);
         }
@@ -82,7 +82,7 @@ public class AtmosphericAttenuationTest {
         PropagationProcessPathData propagationProcessPathData = new PropagationProcessPathData();
 
         for(int idfreq=0;idfreq< expected.length;idfreq++) {
-            double freq = propagationProcessPathData.getFreq_lvl().get(idfreq);
+            double freq = propagationProcessPathData.getFreq_lvl_exact().get(idfreq);
             double coefAttAtmos = PropagationProcessPathData.getCoefAttAtmos(freq, humidity,pressure,temperature+PropagationProcessPathData.K_0);
             assertEquals(expected[idfreq], coefAttAtmos, EPSILON);
         }
@@ -97,7 +97,7 @@ public class AtmosphericAttenuationTest {
         PropagationProcessPathData propagationProcessPathData = new PropagationProcessPathData();
 
         for(int idfreq=0;idfreq< expected.length;idfreq++) {
-            double freq = propagationProcessPathData.getFreq_lvl().get(idfreq);
+            double freq = propagationProcessPathData.getFreq_lvl_exact().get(idfreq);
             double coefAttAtmos = PropagationProcessPathData.getCoefAttAtmos(freq, humidity,pressure,temperature+PropagationProcessPathData.K_0);
             assertEquals(expected[idfreq], coefAttAtmos, EPSILON);
         }
@@ -113,7 +113,7 @@ public class AtmosphericAttenuationTest {
         PropagationProcessPathData propagationProcessPathData = new PropagationProcessPathData();
 
         for(int idfreq=0;idfreq< expected.length;idfreq++) {
-            double freq = propagationProcessPathData.getFreq_lvl().get(idfreq);
+            double freq = propagationProcessPathData.getFreq_lvl_exact().get(idfreq);
             double coefAttAtmos = PropagationProcessPathData.getCoefAttAtmos(freq, humidity,pressure,temperature+PropagationProcessPathData.K_0);
             assertEquals(expected[idfreq], coefAttAtmos, EPSILON);
         }
