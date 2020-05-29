@@ -226,9 +226,9 @@ static double[][] computeLw(Long pk, Geometry geom, SpatialResultSet rs) throws 
      * @param Junc_type Type of junction ((k = 1 for a crossing with traffic lights ; k = 2 for a roundabout)
      */
     // Compute day average level
-    double[] ld = new double[PropagationProcessPathData.freq_lvl.size()];
-    double[] le = new double[PropagationProcessPathData.freq_lvl.size()];
-    double[] ln = new double[PropagationProcessPathData.freq_lvl.size()];
+    double[] ld = new double[PropagationProcessPathData.DEFAULT_FREQ_LVL.size()];
+    double[] le = new double[PropagationProcessPathData.DEFAULT_FREQ_LVL.size()];
+    double[] ln = new double[PropagationProcessPathData.DEFAULT_FREQ_LVL.size()];
 
     double lvPerHour = 0;
     double mvPerHour = 0;
@@ -252,7 +252,7 @@ static double[][] computeLw(Long pk, Geometry geom, SpatialResultSet rs) throws 
         lvPerHour = tmja * (1 - HV_PERCENTAGE) * (lv_hourly_distribution[h] / 100.0);
         hgvPerHour = tmja * HV_PERCENTAGE * (hv_hourly_distribution[h] / 100.0);
         int idFreq = 0;
-        for (int freq : PropagationProcessPathData.freq_lvl) {
+        for (int freq : PropagationProcessPathData.DEFAULT_FREQ_LVL) {
             RSParametersCnossos rsParametersCnossos = new RSParametersCnossos(speedLv, speedMv, speedHgv, speedWav,
                     speedWbv, lvPerHour, mvPerHour, hgvPerHour, wavPerHour, wbvPerHour, freq, Temperature,
                     roadSurface, Ts_stud, Pm_stud, Junc_dist, Junc_type);
@@ -270,7 +270,7 @@ static double[][] computeLw(Long pk, Geometry geom, SpatialResultSet rs) throws 
         lvPerHour = tmja * (1- HV_PERCENTAGE) * (lv_hourly_distribution[h] / 100.0)
         mvPerHour = tmja * HV_PERCENTAGE * (hv_hourly_distribution[h] / 100.0)
         int idFreq = 0
-        for(int freq : PropagationProcessPathData.freq_lvl) {
+        for(int freq : PropagationProcessPathData.DEFAULT_FREQ_LVL) {
             RSParametersCnossos rsParametersCnossos = new RSParametersCnossos(speedLv, speedMv, speedHgv, speedWav,
                     speedWbv, lvPerHour, mvPerHour, hgvPerHour, wavPerHour, wbvPerHour, freq, Temperature,
                     roadSurface, Ts_stud, Pm_stud, Junc_dist, Junc_type);
@@ -288,7 +288,7 @@ static double[][] computeLw(Long pk, Geometry geom, SpatialResultSet rs) throws 
         lvPerHour = tmja * (1- HV_PERCENTAGE) * (lv_hourly_distribution[h] / 100.0)
         mvPerHour = tmja * HV_PERCENTAGE * (hv_hourly_distribution[h] / 100.0)
         int idFreq = 0
-        for(int freq : PropagationProcessPathData.freq_lvl) {
+        for(int freq : PropagationProcessPathData.DEFAULT_FREQ_LVL) {
             RSParametersCnossos rsParametersCnossos = new RSParametersCnossos(speedLv, speedMv, speedHgv, speedWav,
                     speedWbv, lvPerHour, mvPerHour, hgvPerHour, wavPerHour, wbvPerHour, freq, Temperature,
                     roadSurface, Ts_stud, Pm_stud, Junc_dist, Junc_type);

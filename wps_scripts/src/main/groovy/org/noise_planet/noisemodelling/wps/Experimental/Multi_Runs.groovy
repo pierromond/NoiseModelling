@@ -504,7 +504,7 @@ class ReceiverSimulationProcess implements Runnable {
         if (nSimu < 1) nSimu = multiRunsProcessData.Simu.size()
 
         for (int r = 0; r < nSimu; ++r) {
-            simuSpectrum.put(r, new double[PropagationProcessPathData.freq_lvl.size()])
+            simuSpectrum.put(r, new double[PropagationProcessPathData.DEFAULT_FREQ_LVL.size()])
         }
 
         int idReceiver = -1
@@ -701,10 +701,10 @@ class MREvaluateAttenuationCnossos extends EvaluateAttenuationCnossos {
 
     @Override
     double[] getDeltaDif(SegmentPath srpath, PropagationProcessPathData data) {
-        double[] DeltaDif = new double[data.freq_lvl.size()];
+        double[] DeltaDif = new double[data.getFreq_lvl().size()];
         double cprime;
 
-        for (int idfreq = 0; idfreq < data.freq_lvl.size(); idfreq++) {
+        for (int idfreq = 0; idfreq < data.getFreq_lvl().size(); idfreq++) {
 
             double Ch = 1;// Math.min(h0 * (data.celerity / freq_lambda[idfreq]) / 250, 1);
 
@@ -733,9 +733,9 @@ class MREvaluateAttenuationCnossos extends EvaluateAttenuationCnossos {
     }
 
     static double[] getMRARef(MRPropagationPath path) {
-        double[] aRef = new double[PropagationProcessPathData.freq_lvl.size()]
+        double[] aRef = new double[PropagationProcessPathData.DEFAULT_FREQ_LVL.size()]
 
-        for (int idf = 0; idf < PropagationProcessPathData.freq_lvl.size(); ++idf) {
+        for (int idf = 0; idf < PropagationProcessPathData.DEFAULT_FREQ_LVL.size(); ++idf) {
             for (int idRef = 0; idRef < path.refPoints.size(); ++idRef) {
                 //List<Double> alpha = ((PointPath) path.getPointList().get((Integer) path.refPoints.get(idRef))).alphaWall
                 List<Double> alpha = ((PointPath) path.getPointList().get((Integer) path.refPoints.get(idRef))).alphaWall.collect {
@@ -750,13 +750,13 @@ class MREvaluateAttenuationCnossos extends EvaluateAttenuationCnossos {
 
 
     double[] evaluate(MRPropagationPath path, PropagationProcessPathData data) {
-        aGlobal = new double[PropagationProcessPathData.freq_lvl.size()]
-        freq_lambda = new double[PropagationProcessPathData.freq_lvl.size()]
-        double[] aRef = new double[PropagationProcessPathData.freq_lvl.size()]
+        aGlobal = new double[PropagationProcessPathData.DEFAULT_FREQ_LVL.size()]
+        freq_lambda = new double[PropagationProcessPathData.DEFAULT_FREQ_LVL.size()]
+        double[] aRef = new double[PropagationProcessPathData.DEFAULT_FREQ_LVL.size()]
 
-        for (int idf = 0; idf < PropagationProcessPathData.freq_lvl.size(); ++idf) {
-            if (PropagationProcessPathData.freq_lvl.get(idf) > 0) {
-                freq_lambda[idf] = data.getCelerity() / (double) (Integer) PropagationProcessPathData.freq_lvl.get(idf)
+        for (int idf = 0; idf < PropagationProcessPathData.DEFAULT_FREQ_LVL.size(); ++idf) {
+            if (PropagationProcessPathData.DEFAULT_FREQ_LVL.get(idf) > 0) {
+                freq_lambda[idf] = data.getCelerity() / (double) (Integer) PropagationProcessPathData.DEFAULT_FREQ_LVL.get(idf)
             } else {
                 freq_lambda[idf] = 1.0D
             }
@@ -778,7 +778,7 @@ class MREvaluateAttenuationCnossos extends EvaluateAttenuationCnossos {
             aRef = getMRARef(path)
         }
 
-        for (int idfreq = 0; idfreq < PropagationProcessPathData.freq_lvl.size(); ++idfreq) {
+        for (int idfreq = 0; idfreq < PropagationProcessPathData.DEFAULT_FREQ_LVL.size(); ++idfreq) {
             double aAtm;
             if (path.difVPoints.size() <= 0 && path.refPoints.size() <= 0) {
                 aAtm = getAAtm(((SegmentPath) path.getSRList().get(0)).d, alpha_atmo[idfreq]);

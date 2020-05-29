@@ -157,7 +157,7 @@ class DronePropagationProcessData extends PropagationProcessData {
         double db_m4000 = 90
         double db_m8000 = 90
 
-        double[] res_d = new double[PropagationProcessPathData.freq_lvl.size()]
+        double[] res_d = new double[PropagationProcessPathData.DEFAULT_FREQ_LVL.size()]
 
         res_d = [db_m63, db_m125, db_m250, db_m500, db_m1000, db_m2000, db_m4000, db_m8000]
 
