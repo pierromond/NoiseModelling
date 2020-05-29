@@ -148,8 +148,9 @@ public class MeshBuilder {
          * @param alphaUniqueValue Set absorption coefficient of walls
          */
         public void setAlpha(double alphaUniqueValue) {
-            List<Double> newAlpha = new ArrayList<>(PropagationProcessPathData.freq_lvl.size());
-            for(double freq : PropagationProcessPathData.freq_lvl_exact) {
+            PropagationProcessPathData propagationProcessPathData = new PropagationProcessPathData();
+            List<Double> newAlpha = new ArrayList<>(propagationProcessPathData.getFreq_lvl().size());
+            for(double freq : propagationProcessPathData.getFreq_lvl()) {
                 newAlpha.add(getWallAlpha(alphaUniqueValue, freq));
             }
             this.alpha = newAlpha;

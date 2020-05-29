@@ -77,10 +77,10 @@ public class EvaluateAttenuationCnossos {
     }
 
     public double[] getDeltaDif(SegmentPath srpath, PropagationProcessPathData data) {
-        double[] DeltaDif = new double[data.freq_lvl.size()];
+        double[] DeltaDif = new double[data.getFreq_lvl().size()];
         double cprime;
 
-        for (int idfreq = 0; idfreq < data.freq_lvl.size(); idfreq++) {
+        for (int idfreq = 0; idfreq < data.getFreq_lvl().size(); idfreq++) {
 
             double Ch = 1;// Math.min(h0 * (data.celerity / freq_lambda[idfreq]) / 250, 1);
 
@@ -137,16 +137,16 @@ public class EvaluateAttenuationCnossos {
      */
     public static double[] getAGroundCore(PropagationPath path, SegmentPath segmentPath, PropagationProcessPathData data) {
 
-        double[] aGround = new double[data.freq_lvl.size()];
+        double[] aGround = new double[data.getFreq_lvl().size()];
         double aGroundmin;
         double AGround;
 
-        for (int idfreq = 0; idfreq < data.freq_lvl.size(); idfreq++) {
+        for (int idfreq = 0; idfreq < data.getFreq_lvl().size(); idfreq++) {
             //NF S 31-133 page 41 c
-            double k = 2 * Math.PI *  data.freq_lvl.get(idfreq) / data.getCelerity();
+            double k = 2 * Math.PI *  data.getFreq_lvl().get(idfreq) / data.getCelerity();
             //NF S 31-113 page 41 w
-            double w = 0.0185 * Math.pow(data.freq_lvl.get(idfreq), 2.5) * Math.pow(segmentPath.gw, 2.6) /
-                    (Math.pow(data.freq_lvl.get(idfreq), 1.5) * Math.pow(segmentPath.gw, 2.6) + 1.3 * Math.pow(10, 3) * Math.pow(data.freq_lvl.get(idfreq), 0.75) * Math.pow(segmentPath.gw, 1.3) + 1.16 * Math.pow(10, 6));
+            double w = 0.0185 * Math.pow(data.getFreq_lvl().get(idfreq), 2.5) * Math.pow(segmentPath.gw, 2.6) /
+                    (Math.pow(data.getFreq_lvl().get(idfreq), 1.5) * Math.pow(segmentPath.gw, 2.6) + 1.3 * Math.pow(10, 3) * Math.pow(data.getFreq_lvl().get(idfreq), 0.75) * Math.pow(segmentPath.gw, 1.3) + 1.16 * Math.pow(10, 6));
             //NF S 31-113 page 41 Cf
             double cf = segmentPath.dp * (1 + 3 * w * segmentPath.dp * Math.pow(Math.E, -Math.sqrt(w * segmentPath.dp))) / (1 + w * segmentPath.dp);
             //NF S 31-113 page 41 A sol
@@ -203,7 +203,7 @@ public class EvaluateAttenuationCnossos {
 
 
     public double[] getARef(PropagationPath path, PropagationProcessPathData data) {
-        double[] aRef = new double[data.freq_lvl.size()];
+        double[] aRef = new double[data.getFreq_lvl().size()];
         for (int idf = 0; idf < nbfreq; idf++) {
             for (int idRef = 0; idRef < path.refPoints.size(); idRef++) {
                 List<Double> alpha = path.getPointList().get(path.refPoints.get(idRef)).alphaWall;
@@ -218,7 +218,7 @@ public class EvaluateAttenuationCnossos {
 
 
     public double[] getAGround(SegmentPath segmentPath,PropagationPath path, PropagationProcessPathData data) {
-        double[] aGround = new double[data.freq_lvl.size()];
+        double[] aGround = new double[data.getFreq_lvl().size()];
         double aGroundmin;
 
         // Here there is a debate if use this condition or not
@@ -251,7 +251,7 @@ public class EvaluateAttenuationCnossos {
 
         double[] aGround;
         double[] aBoundary ;
-        double[] aDif = new double[data.freq_lvl.size()];
+        double[] aDif = new double[data.getFreq_lvl().size()];
 
         // Set Gm and Gw for AGround SR - Table 2.5.b
         if (path.isFavorable()) {
@@ -331,16 +331,16 @@ public class EvaluateAttenuationCnossos {
 
     public double[] evaluate(PropagationPath path, PropagationProcessPathData data) {
         // init
-        aGlobal = new double[data.freq_lvl.size()];
+        aGlobal = new double[data.getFreq_lvl().size()];
         double[] aBoundary ;
         double[] aRef ;
-        nbfreq = PropagationProcessPathData.freq_lvl.size();
+        nbfreq = data.getFreq_lvl().size();
 
         // Init wave length for each frequency
         freq_lambda = new double[nbfreq];
         for (int idf = 0; idf < nbfreq; idf++) {
-            if (PropagationProcessPathData.freq_lvl.get(idf) > 0) {
-                freq_lambda[idf] = data.getCelerity() / PropagationProcessPathData.freq_lvl.get(idf);
+            if (data.getFreq_lvl().get(idf) > 0) {
+                freq_lambda[idf] = data.getCelerity() / data.getFreq_lvl().get(idf);
             } else {
                 freq_lambda[idf] = 1;
             }

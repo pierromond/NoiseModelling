@@ -955,11 +955,17 @@ public class EvaluateAttenuationCnossosTest {
         FastObstructionTest manager = new FastObstructionTest(mesh.getPolygonWithHeight(), mesh.getTriangles(),
                 mesh.getTriNeighbors(), mesh.getVertices());
 
+        PropagationProcessPathData attData = new PropagationProcessPathData();
+        attData.setHumidity(70);
+        attData.setTemperature(10);
+        attData.setPrime2520(false);
+
+
         DirectPropagationProcessData rayData = new DirectPropagationProcessData(manager);
         rayData.addReceiver(new Coordinate(200, 50, 11.5));
 
         // Push source with sound level
-        rayData.addSource(factory.createPoint(new Coordinate(10, 10, 1)), ComputeRays.dbaToW(aWeighting(Collections.nCopies(PropagationProcessPathData.freq_lvl.size(), 93d))));
+        rayData.addSource(factory.createPoint(new Coordinate(10, 10, 1)), ComputeRays.dbaToW(aWeighting(Collections.nCopies(attData.getFreq_lvl().size(), 93d))));
 
         rayData.setComputeHorizontalDiffraction(true);
         rayData.addSoilType(new GeoWithSoilType(factory.toGeometry(new Envelope(0, 50, -100, 100)), 0.9));
@@ -969,11 +975,7 @@ public class EvaluateAttenuationCnossosTest {
         rayData.setComputeVerticalDiffraction(true);
         rayData.setGs(0.9);
 
-        PropagationProcessPathData attData = new PropagationProcessPathData();
-        attData.setHumidity(70);
-        attData.setTemperature(10);
-        attData.setPrime2520(false);
-        ComputeRaysOut propDataOut = new RayOut(true, attData, rayData);
+         ComputeRaysOut propDataOut = new RayOut(true, attData, rayData);
         ComputeRays computeRays = new ComputeRays(rayData);
         computeRays.setThreadCount(1);
         computeRays.run(propDataOut);
@@ -1859,7 +1861,7 @@ public class EvaluateAttenuationCnossosTest {
         evaluateAttenuationCnossos.evaluate(propPath, pathData);
         double[] aGlobalMeteoHom = evaluateAttenuationCnossos.getaGlobal();
         for(int i = 0; i < aGlobalMeteoHom.length; i++) {
-            assertFalse(String.format("freq %d Hz with nan value",PropagationProcessPathData.freq_lvl.get(i)), Double.isNaN(aGlobalMeteoHom[i]));
+            assertFalse(String.format("freq %d Hz with nan value",pathData.getFreq_lvl().get(i)), Double.isNaN(aGlobalMeteoHom[i]));
         }
 
     }

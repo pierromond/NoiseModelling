@@ -58,8 +58,13 @@ public class PropagationProcessPathData {
     static final  double K01 = 273.16;  // Isothermal temperature at the triple point (K)
     static final double a8 = (2 * Math.PI / 35.0) * 10 * Math.log10(Math.pow(Math.exp(1),2));
     /** Frequency bands values, by third octave */
-    public static final List<Integer> freq_lvl = Arrays.asList(63, 125, 250, 500, 1000, 2000, 4000, 8000);
-    public static final List<Double> freq_lvl_exact = Arrays.asList(63.0957, 125.8925, 251.1888, 501.1872, 1000.0, 1995.26231, 3981.07171, 7943.28235);
+    public static final List<Integer> DEFAULT_FREQ_LVL = Arrays.asList(63, 125, 250, 500, 1000, 2000, 4000, 8000);
+    public static final List<Double> DEFAULT_FREQ_LVL_EXACT = Arrays.asList(63.0957, 125.8925, 251.1888, 501.1872, 1000.0, 1995.26231, 3981.07171, 7943.28235);
+
+
+    private List<Integer> freq_lvl  = DEFAULT_FREQ_LVL;
+    private List<Double> freq_lvl_exact  = DEFAULT_FREQ_LVL_EXACT;
+
     public static final List<Double> freq_lvl_a_weighting = Arrays.asList(-26.2, -16.1, -8.6, -3.2, 0.0, 1.2, 1.0, -1.1);
     public static final double[] DEFAULT_WIND_ROSE = new double[]{0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5};
     /** Temperature in celsius */
@@ -74,6 +79,7 @@ public class PropagationProcessPathData {
     private boolean prime2520 = false; // choose to use prime values to compute eq. 2.5.20
     /** probability occurrence favourable condition */
     private double[] windRose  = DEFAULT_WIND_ROSE;
+
 
     /**
      * Set relative humidity in percentage.
@@ -176,6 +182,23 @@ public class PropagationProcessPathData {
         this.alpha_atmo = getAtmoCoeffArray(freq_lvl_exact,  temperature,  pressure,  humidity);
         return this;
     }
+
+    public List<Integer> getFreq_lvl() {
+        return freq_lvl;
+    }
+
+    public void setFreq_lvl(List<Integer> freq_lvl) {
+        this.freq_lvl = freq_lvl;
+    }
+
+    public List<Double> getFreq_lvl_exact() {
+        return freq_lvl_exact;
+    }
+
+    public void setFreq_lvl_exact(List<Double> freq_lvl_exact) {
+        this.freq_lvl_exact = freq_lvl_exact;
+    }
+
 
     /**
      *
@@ -302,7 +325,7 @@ public class PropagationProcessPathData {
 
 
     public double[] getAlpha_atmo() {
-        return alpha_atmo;
+        return getAtmoCoeffArray(freq_lvl_exact,  temperature,  pressure,  humidity);
     }
 
 
