@@ -2,6 +2,7 @@ package org.noise_planet.noisemodelling.emission.jdbc;
 
 import org.h2gis.api.EmptyProgressVisitor;
 import org.h2gis.functions.factory.H2GISDBFactory;
+import org.h2gis.functions.io.dbf.DBFRead;
 import org.h2gis.functions.io.shp.SHPRead;
 import org.h2gis.utilities.JDBCUtilities;
 import org.h2gis.utilities.SFSUtilities;

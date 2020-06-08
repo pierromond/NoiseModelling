@@ -24,6 +24,7 @@ import groovy.sql.Sql
 import org.h2gis.functions.io.shp.SHPRead
 import org.h2gis.functions.io.shp.SHPWrite
 import org.noise_planet.noisemodelling.wps.Import_and_Export.Import_File
+import org.noise_planet.noisemodelling.wps.NoiseModelling.Noise_level_from_third_octave_source
 import org.noise_planet.noisemodelling.wps.NoiseModelling.Noise_level_from_traffic
 import org.noise_planet.noisemodelling.wps.NoiseModelling.Noise_level_from_source
 import org.noise_planet.noisemodelling.wps.NoiseModelling.Road_Emission_from_Traffic
@@ -152,5 +153,33 @@ class TestNoiseModelling extends JdbcTestCase {
         assertTrue(res.contains("LNIGHT_GEOM"))
         assertTrue(res.contains("LDEN_GEOM"))
     }
+
+
+   /* void testLdenFromEmissionThirdOctave() {
+
+
+        res = new Import_File().exec(connection,
+                ["pathFile" : TestNoiseModelling.getResource("PointSource.shp").getPath(),
+                 "inputSRID": "2154",
+                 "tableName": "source"])
+
+        res = new Import_File().exec(connection,
+                ["pathFile" : TestNoiseModelling.getResource("buildings.shp").getPath(),
+                 "inputSRID": "2154",
+                 "tableName": "buildings"])
+
+        res = new Import_File().exec(connection,
+                ["pathFile" : TestNoiseModelling.getResource("receivers.shp").getPath(),
+                 "inputSRID": "2154",
+                 "tableName": "receivers"])
+
+
+        res = new Noise_level_from_third_octave_source().exec(connection,
+                ["tableBuilding"   : "BUILDINGS",
+                 "tableSources"   : "source",
+                 "tableReceivers": "RECEIVERS"])
+
+        assertTrue(res.contains("LDAY_GEOM"))
+    }*/
 
 }

@@ -213,6 +213,12 @@ public class LDENPropagationProcessData extends PropagationProcessData {
                 le[idfreq] = ComputeRays.dbaToW(val);
                 ln[idfreq] = ComputeRays.dbaToW(val);
             }
+        } else if (ldenConfig.input_mode == LDENConfig.INPUT_MODE.INPUT_MODE_LW) {
+            // Read average 24h traffic
+            for (int idfreq = 0; idfreq < propagationProcessPathData.getFreq_lvl().size(); idfreq++) {
+                ld[idfreq] = ComputeRays.dbaToW(rs.getDouble(lwFrequencyPrepend + "HZ" +
+                        propagationProcessPathData.getFreq_lvl().get(idfreq)));
+            }
         } else if (ldenConfig.input_mode == LDENConfig.INPUT_MODE.INPUT_MODE_LW_DEN) {
             // Read average 24h traffic
             for (int idfreq = 0; idfreq < propagationProcessPathData.getFreq_lvl().size(); idfreq++) {

@@ -60,8 +60,7 @@ public class EvaluateAttenuationThirdOctaveTest {
         PropagationProcessPathData attData = new PropagationProcessPathData();
         List<Integer> freq_lvl = Arrays.asList(50,63,80,100, 125,160, 200,250,315,400 ,500,630,800, 1000,1250,1600, 2000,2500,3150, 4000,5000,6300, 8000,10000);
         List<Double> freq_lvl_exact = Arrays.asList(50.0, 63.0957,80.0,100.0, 125.8925,160.0,200.0 ,251.1888,315.0,400.0, 501.1872,630.0,800.0, 1000.0,1250.0,1600.0, 1995.26231,2500.0,3150.0, 3981.07171,5000.0,6300.0 ,7943.28235,10000.0);
-        attData.setHumidity(70);
-        attData.setTemperature(10);
+
         attData.setFreq_lvl(freq_lvl);
         attData.setFreq_lvl_exact(freq_lvl_exact);
 
@@ -71,7 +70,7 @@ public class EvaluateAttenuationThirdOctaveTest {
         computeRays.run(propDataOut);
 
         double[] L = addArray(propDataOut.getVerticesSoundLevel().get(0).value, new double[]{93,93,93,93,93,93,93,93,93,93,93,93,93,93,93,93,93,93,93,93,93,93,93,93});
-        assertArrayEquals(  new double[]{39.96,39.95,39.94,39.92,39.89,39.86,39.82,39.77,39.72,39.66,39.60,39.52,39.41,39.26,39.04,38.65,38.10,37.23,35.83,33.61,30.26,25.08,17.28,5.97},L, ERROR_EPSILON_very_low);
+        assertArrayEquals(  new double[]{39.96,39.95,39.94,39.92,39.89,39.86,39.82,39.77,39.72,39.66,39.60,39.52,39.41,39.26,39.04,38.65,38.28,37.61,36.55,34.85,32.25,28.15,21.78,12.10},L, ERROR_EPSILON_very_low);
     }
 
 
