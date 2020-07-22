@@ -57,7 +57,9 @@ public class MeshBuilder {
     private List<Triangle> triNeighbors; // Neighbors
     private static final int BUILDING_COUNT_HINT = 1500; // 2-3 km² average buildings
     public static final List<Double> ALPHA_DEFAULT_VALUE = Collections.unmodifiableList(
-            Arrays.asList(0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1));
+            Arrays.asList(0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,
+                    0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,
+                    0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1));
 
     private List<PolygonWithHeight> polygonWithHeight = new ArrayList<>(BUILDING_COUNT_HINT);//list polygon with height
     private List<LineString> envelopeSplited = new ArrayList<>();

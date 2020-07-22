@@ -32,6 +32,10 @@
  * info_at_ orbisgis.org
  */
 package org.noise_planet.noisemodelling.propagation;
+import java.lang.reflect.Array;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -206,7 +210,12 @@ public class EvaluateAttenuationCnossos {
         double[] aRef = new double[data.getFreq_lvl().size()];
         for (int idf = 0; idf < nbfreq; idf++) {
             for (int idRef = 0; idRef < path.refPoints.size(); idRef++) {
+                if (path.getPointList().get(path.refPoints.get(idRef)).alphaWall.size() != data.getFreq_lvl().size()){
+                    double alpha = path.getPointList().get(path.refPoints.get(idRef)).alphaWall.get(0);
+                    path.getPointList().get(path.refPoints.get(idRef)).setAlphaWall(Collections.nCopies(data.getFreq_lvl().size(), alpha));
+                }
                 List<Double> alpha = path.getPointList().get(path.refPoints.get(idRef)).alphaWall;
+
                 /*if (gToSigma || alphaUniqueValue > 1){
                     PropagationProcessData.getWallAlpha(alphaUniqueValue, data.freq_lvl.get(idf));
                 }*/

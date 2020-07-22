@@ -90,9 +90,9 @@ class DroneThirdProcessData {
                 //System.out.println("line "+ (14+(nphi+2)*theta+phi))
                 String[] values = line.split("\\s+")
 
-                double[] parsed = new double[values.length]
-                for (int i = 0; i < values.length; i++) parsed[i] = Double.valueOf(values[i])
-                lvl = parsed // todo check that well parsed
+                double[] parsed = new double[values.length-1]
+                for (int i = 1; i < values.length; i++) parsed[i-1] = Double.valueOf(values[i])
+                lvl = parsed
 
                 break
             }
