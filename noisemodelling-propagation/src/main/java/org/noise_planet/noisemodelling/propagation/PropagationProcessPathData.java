@@ -62,8 +62,8 @@ public class PropagationProcessPathData {
     public static final List<Double> DEFAULT_FREQ_LVL_EXACT = Arrays.asList(63.0957, 125.8925, 251.1888, 501.1872, 1000.0, 1995.26231, 3981.07171, 7943.28235);
 
 
-    private List<Integer> freq_lvl  = DEFAULT_FREQ_LVL;
-    private List<Double> freq_lvl_exact  = DEFAULT_FREQ_LVL_EXACT;
+    public List<Integer> freq_lvl  = DEFAULT_FREQ_LVL;
+    public List<Double> freq_lvl_exact  = DEFAULT_FREQ_LVL_EXACT;
 
     public static final List<Double> freq_lvl_a_weighting = Arrays.asList(-26.2, -16.1, -8.6, -3.2, 0.0, 1.2, 1.0, -1.1);
     public static final double[] DEFAULT_WIND_ROSE = new double[]{0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5};
