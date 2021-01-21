@@ -25,6 +25,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
 
+import static org.h2gis.utilities.GeometryTableUtilities.getFirstGeometryColumnNameAndIndex;
+
 /**
  * Compute noise propagation at specified receiver points.
  * @author Nicolas Fortin
@@ -68,7 +70,7 @@ public class PointNoiseMap extends JdbcNoiseMap {
      */
     public PropagationProcessData prepareCell(Connection connection,int cellI, int cellJ,
                                               ProgressVisitor progression, Set<Long> skipReceivers) throws SQLException, IOException {
-        boolean isH2 = JDBCUtilities.isH2DataBase(connection.getMetaData());
+        boolean isH2 = JDBCUtilities.isH2DataBase((Connection) connection.getMetaData());
         MeshBuilder mesh = new MeshBuilder();
         int ij = cellI * gridDim + cellJ + 1;
         if(verbose) {
@@ -125,12 +127,13 @@ public class PointNoiseMap extends JdbcNoiseMap {
 
         // Fetch receivers
 
-        String receiverGeomName = SFSUtilities.getGeometryFields(connection,
-                TableLocation.parse(receiverTableName)).get(0);
-        int intPk = JDBCUtilities.getIntegerPrimaryKey(connection, receiverTableName);
+
+        String receiverGeomName = getFirstGeometryColumnNameAndIndex(connection,
+                TableLocation.parse(receiverTableName)).first();
+        int intPk = JDBCUtilities.getIntegerPrimaryKey(connection, TableLocation.parse(receiverTableName));
         String pkSelect = "";
         if(intPk >= 1) {
-            pkSelect = ", " + TableLocation.quoteIdentifier(JDBCUtilities.getFieldName(connection.getMetaData(), receiverTableName, intPk), isH2);
+            pkSelect = ", " + TableLocation.quoteIdentifier(JDBCUtilities.getColumnName(connection, TableLocation.parse(receiverTableName), intPk), isH2);
         } else {
             throw new SQLException(String.format("Table %s missing primary key for receiver identification", receiverTableName));
         }
@@ -162,7 +165,7 @@ public class PointNoiseMap extends JdbcNoiseMap {
 
     @Override
     protected Envelope getComputationEnvelope(Connection connection) throws SQLException {
-        return SFSUtilities.getTableEnvelope(connection, TableLocation.parse(receiverTableName), "");
+        return GeometryTableUtilities.getEnvelope(connection, TableLocation.parse(receiverTableName), "").getEnvelopeInternal();
     }
 
     /**
@@ -176,13 +179,14 @@ public class PointNoiseMap extends JdbcNoiseMap {
             throw new IllegalStateException("Call initialize before calling searchPopulatedCells");
         }
         Map<CellIndex, Integer> cellIndices = new HashMap<>();
-        List<String> geometryFields = SFSUtilities.getGeometryFields(connection, TableLocation.parse(receiverTableName));
-        String geometryField;
-        if(geometryFields.isEmpty()) {
+        String geometryField = getFirstGeometryColumnNameAndIndex(connection,
+                TableLocation.parse(receiverTableName)).first();
+
+        if(geometryField.isEmpty()) {
             throw new SQLException("The table "+receiverTableName+" does not contain a Geometry field, then the extent " +
                     "cannot be computed");
         }
-        geometryField = geometryFields.get(0);
+
         ResultSet rs = connection.createStatement().executeQuery("SELECT " + geometryField + " FROM " + receiverTableName);
         // Construct RTree with cells envelopes
         STRtree rtree = new STRtree();

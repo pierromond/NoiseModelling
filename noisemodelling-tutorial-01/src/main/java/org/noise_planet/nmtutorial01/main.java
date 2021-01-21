@@ -2,11 +2,11 @@ package org.noise_planet.nmtutorial01;
 
 import org.cts.crs.CRSException;
 import org.cts.op.CoordinateOperationException;
+import org.h2.value.ValueVarchar;
 import org.h2gis.api.EmptyProgressVisitor;
 import org.h2gis.api.ProgressVisitor;
 import org.h2gis.functions.io.csv.CSVDriverFunction;
 import org.h2gis.functions.io.geojson.GeoJsonRead;
-import org.h2gis.utilities.SFSUtilities;
 import org.noise_planet.noisemodelling.pathfinder.utils.KMLDocument;
 import org.noise_planet.noisemodelling.jdbc.LDENConfig;
 import org.noise_planet.noisemodelling.jdbc.LDENPointNoiseMapFactory;
@@ -28,6 +28,8 @@ import java.sql.Statement;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.*;
+
+import static org.h2gis.utilities.JDBCUtilities.wrapConnection;
 
 class Main {
     public static void main(String[] args) throws SQLException, IOException {
@@ -54,20 +56,20 @@ class Main {
 
         // Open connection to database
         String dbName = new File(workingDir + df.format(new Date())).toURI().toString();
-        Connection connection = SFSUtilities.wrapConnection(DbUtilities.createSpatialDataBase(dbName, true));
+        Connection connection = wrapConnection(DbUtilities.createSpatialDataBase(dbName, true));
         Statement sql = connection.createStatement();
 
         // Import BUILDINGS
 
         logger.info("Import buildings");
 
-        GeoJsonRead.readGeoJson(connection, Main.class.getResource("buildings.geojson").getFile(), "BUILDINGS");
+        GeoJsonRead.importTable(connection, Main.class.getResource("buildings.geojson").getFile(), ValueVarchar.get("BUILDINGS"));
 
         // Import noise source
 
         logger.info("Import noise source");
 
-        GeoJsonRead.readGeoJson(connection, Main.class.getResource("lw_roads.geojson").getFile(), "LW_ROADS");
+        GeoJsonRead.importTable(connection, Main.class.getResource("lw_roads.geojson").getFile(), ValueVarchar.get("LW_ROADS"));
         // Set primary key
         sql.execute("ALTER TABLE LW_ROADS ALTER COLUMN PK INTEGER NOT NULL");
         sql.execute("ALTER TABLE LW_ROADS ADD PRIMARY KEY (PK)");
@@ -76,7 +78,7 @@ class Main {
 
         logger.info("Import evaluation coordinates");
 
-        GeoJsonRead.readGeoJson(connection, Main.class.getResource("receivers.geojson").getFile(), "RECEIVERS");
+        GeoJsonRead.importTable(connection, Main.class.getResource("receivers.geojson").getFile(), ValueVarchar.get("RECEIVERS"));
         // Set primary key
         sql.execute("ALTER TABLE RECEIVERS ALTER COLUMN PK INTEGER NOT NULL");
         sql.execute("ALTER TABLE RECEIVERS ADD PRIMARY KEY (PK)");
@@ -86,7 +88,7 @@ class Main {
 
         logger.info("Import digital elevation model");
 
-        GeoJsonRead.readGeoJson(connection, Main.class.getResource("dem_lorient.geojson").getFile(), "DEM");
+        GeoJsonRead.importTable(connection, Main.class.getResource("dem_lorient.geojson").getFile(), ValueVarchar.get("DEM"));
 
         // Init NoiseModelling
         PointNoiseMap pointNoiseMap = new PointNoiseMap("BUILDINGS", "LW_ROADS", "RECEIVERS");

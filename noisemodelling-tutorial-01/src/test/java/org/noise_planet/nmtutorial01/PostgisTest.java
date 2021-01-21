@@ -1,16 +1,16 @@
 package org.noise_planet.nmtutorial01;
 
+import org.h2.value.ValueVarchar;
 import org.h2gis.api.EmptyProgressVisitor;
 import org.h2gis.api.ProgressVisitor;
 import org.h2gis.functions.io.geojson.GeoJsonRead;
 import org.h2gis.postgis_jts_osgi.DataSourceFactoryImpl;
-import org.h2gis.utilities.SFSUtilities;
 import org.junit.Test;
 import org.noise_planet.noisemodelling.jdbc.LDENConfig;
 import org.noise_planet.noisemodelling.jdbc.LDENPointNoiseMapFactory;
 import org.noise_planet.noisemodelling.jdbc.PointNoiseMap;
-import org.noise_planet.noisemodelling.propagation.*;
-import org.noise_planet.noisemodelling.pathfinder.*;
+import org.noise_planet.noisemodelling.pathfinder.IComputeRaysOut;
+import org.noise_planet.noisemodelling.pathfinder.RootProgressVisitor;
 import org.postgresql.util.PSQLException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +25,7 @@ import java.util.Locale;
 import java.util.Properties;
 import java.util.Set;
 
+import static org.h2gis.utilities.JDBCUtilities.wrapConnection;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -40,7 +41,8 @@ public class PostgisTest {
         p.setProperty("databaseName", "postgres");
         p.setProperty("user", "postgres");
         p.setProperty("password", "");
-        try(Connection connection = SFSUtilities.wrapConnection(dataSourceFactory.createDataSource(p).getConnection())) {
+
+        try(Connection connection = wrapConnection(dataSourceFactory.createDataSource(p).getConnection())) {
             Statement sql = connection.createStatement();
 
             // Clean DB
@@ -54,13 +56,13 @@ public class PostgisTest {
 
             LOGGER.info("Import buildings");
 
-            GeoJsonRead.readGeoJson(connection, Main.class.getResource("buildings.geojson").getFile(), "BUILDINGS");
+            GeoJsonRead.importTable(connection, Main.class.getResource("buildings.geojson").getFile(), ValueVarchar.get("BUILDINGS"));
 
             // Import noise source
 
             LOGGER.info("Import noise source");
 
-            GeoJsonRead.readGeoJson(connection, Main.class.getResource("lw_roads.geojson").getFile(), "lw_roads");
+            GeoJsonRead.importTable(connection, Main.class.getResource("lw_roads.geojson").getFile(), ValueVarchar.get("lw_roads"));
             // Set primary key
             sql.execute("ALTER TABLE lw_roads ADD CONSTRAINT lw_roads_pk PRIMARY KEY (\"PK\");");
 
@@ -68,7 +70,7 @@ public class PostgisTest {
 
             LOGGER.info("Import evaluation coordinates");
 
-            GeoJsonRead.readGeoJson(connection, Main.class.getResource("receivers.geojson").getFile(), "receivers");
+            GeoJsonRead.importTable(connection, Main.class.getResource("receivers.geojson").getFile(), ValueVarchar.get("receivers"));
             // Set primary key
             sql.execute("ALTER TABLE receivers ADD CONSTRAINT RECEIVERS_pk PRIMARY KEY (\"PK\");");
 
@@ -76,7 +78,7 @@ public class PostgisTest {
 
             LOGGER.info("Import digital elevation model");
 
-            GeoJsonRead.readGeoJson(connection, Main.class.getResource("dem_lorient.geojson").getFile(), "dem");
+            GeoJsonRead.importTable(connection, Main.class.getResource("dem_lorient.geojson").getFile(), ValueVarchar.get("dem"));
 
             // Init NoiseModelling
             PointNoiseMap pointNoiseMap = new PointNoiseMap("buildings", "lw_roads", "receivers");

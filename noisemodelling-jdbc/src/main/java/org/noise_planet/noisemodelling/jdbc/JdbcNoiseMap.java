@@ -1,10 +1,7 @@
 package org.noise_planet.noisemodelling.jdbc;
 
 import org.h2gis.api.ProgressVisitor;
-import org.h2gis.utilities.JDBCUtilities;
-import org.h2gis.utilities.SFSUtilities;
-import org.h2gis.utilities.SpatialResultSet;
-import org.h2gis.utilities.TableLocation;
+import org.h2gis.utilities.*;
 import org.locationtech.jts.geom.*;
 import org.locationtech.jts.io.WKTWriter;
 import org.noise_planet.noisemodelling.pathfinder.GeoWithSoilType;
@@ -21,6 +18,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+
+import static org.h2gis.utilities.GeometryTableUtilities.getFirstGeometryColumnNameAndIndex;
 
 /**
  * Common attributes for propagation of sound sources.
@@ -126,12 +125,13 @@ public abstract class JdbcNoiseMap {
 
     protected void fetchCellDem(Connection connection, Envelope fetchEnvelope, MeshBuilder mesh) throws SQLException {
         if(!demTable.isEmpty()) {
-            List<String> geomFields = SFSUtilities.getGeometryFields(connection,
+            Tuple<String, Integer> geomFieldsTuple = getFirstGeometryColumnNameAndIndex(connection,
                     TableLocation.parse(demTable));
+            String geomFields = geomFieldsTuple.first();
             if(geomFields.isEmpty()) {
                 throw new SQLException("Digital elevation model table \""+demTable+"\" must exist and contain a POINT field");
             }
-            String topoGeomName = geomFields.get(0);
+            String topoGeomName = geomFields;
             try (PreparedStatement st = connection.prepareStatement(
                     "SELECT " + TableLocation.quoteIdentifier(topoGeomName) + " FROM " +
                             demTable + " WHERE " +
@@ -154,8 +154,8 @@ public abstract class JdbcNoiseMap {
         if(!soilTableName.isEmpty()){
             double startX = Math.floor(fetchEnvelope.getMinX() / groundSurfaceSplitSideLength) * groundSurfaceSplitSideLength;
             double startY = Math.floor(fetchEnvelope.getMinY() / groundSurfaceSplitSideLength) * groundSurfaceSplitSideLength;
-            String soilGeomName = SFSUtilities.getGeometryFields(connection,
-                    TableLocation.parse(soilTableName)).get(0);
+            String soilGeomName =getFirstGeometryColumnNameAndIndex(connection,
+                    TableLocation.parse(soilTableName)).first();
             try (PreparedStatement st = connection.prepareStatement(
                     "SELECT " + TableLocation.quoteIdentifier(soilGeomName) + ", G FROM " +
                             soilTableName + " WHERE " +
@@ -208,13 +208,15 @@ public abstract class JdbcNoiseMap {
             additionalQuery += ", " + alphaFieldName;
         }
         String pkBuilding = "";
-        final int indexPk = JDBCUtilities.getIntegerPrimaryKey(connection, buildingsTableName);
+        final int indexPk = JDBCUtilities.getIntegerPrimaryKey(connection, TableLocation.parse(buildingsTableName));
+
         if(indexPk > 0) {
-            pkBuilding = JDBCUtilities.getFieldName(connection.getMetaData(), buildingsTableName, indexPk);
+            pkBuilding = JDBCUtilities.getColumnName(connection, TableLocation.parse(buildingsTableName), indexPk);
             additionalQuery += ", " + pkBuilding;
         }
-        String buildingGeomName = SFSUtilities.getGeometryFields(connection,
-                TableLocation.parse(buildingsTableName)).get(0);
+         String buildingGeomName =  getFirstGeometryColumnNameAndIndex(connection,
+                TableLocation.parse(buildingsTableName)).first();
+
         try (PreparedStatement st = connection.prepareStatement(
                 "SELECT " + TableLocation.quoteIdentifier(buildingGeomName) + additionalQuery + " FROM " +
                         buildingsTableName + " WHERE " +
@@ -273,13 +275,15 @@ public abstract class JdbcNoiseMap {
     public void fetchCellSource(Connection connection,Envelope fetchEnvelope, PropagationProcessData propagationProcessData)
             throws SQLException, IOException {
         TableLocation sourceTableIdentifier = TableLocation.parse(sourcesTableName);
-        List<String> geomFields = SFSUtilities.getGeometryFields(connection, sourceTableIdentifier);
+        Tuple<String, Integer> geomFieldsTuple = getFirstGeometryColumnNameAndIndex(connection,
+                TableLocation.parse(demTable));
+        String geomFields = geomFieldsTuple.first();
         if(geomFields.isEmpty()) {
             throw new SQLException(String.format("The table %s does not exists or does not contain a geometry field", sourceTableIdentifier));
         }
-        String sourceGeomName =  geomFields.get(0);
+        String sourceGeomName =  geomFields;
         Geometry domainConstraint = geometryFactory.toGeometry(fetchEnvelope);
-        int pkIndex = JDBCUtilities.getIntegerPrimaryKey(connection, sourcesTableName);
+        int pkIndex = JDBCUtilities.getIntegerPrimaryKey(connection, TableLocation.parse(sourcesTableName));
         if(pkIndex < 1) {
             throw new IllegalArgumentException(String.format("Source table %s does not contain a primary key", sourceTableIdentifier));
         }
@@ -338,7 +342,7 @@ public abstract class JdbcNoiseMap {
             throw new SQLException("A sound source table must be provided");
         }
         geometryFactory = new GeometryFactory(new PrecisionModel(),
-                SFSUtilities.getSRID(connection, TableLocation.parse(sourcesTableName)));
+                GeometryTableUtilities.getSRID(connection, TableLocation.parse(sourcesTableName)));
 
         // Steps of execution
         // Evaluation of the main bounding box (sourcesTableName+buildingsTableName)

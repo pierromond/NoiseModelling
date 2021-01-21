@@ -10,7 +10,7 @@
     <parent>
         <groupId>org.orbisgis</groupId>
         <artifactId>noisemodelling-parent</artifactId>
-        <version>3.3.1</version>
+        <version>4.0.0</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
     <description>Compute sound propagation rays.</description>
@@ -26,6 +26,11 @@
             <artifactId>commons-collections</artifactId>
             <version>3.2.2</version>
             <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>${h2-version}</version>
         </dependency>
         <dependency>
             <groupId>${jts-core-groupId}</groupId>

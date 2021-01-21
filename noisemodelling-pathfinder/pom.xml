@@ -10,11 +10,18 @@
     <parent>
         <groupId>org.orbisgis</groupId>
         <artifactId>noisemodelling-parent</artifactId>
-        <version>3.3.1</version>
+        <version>4.0.0</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
     <description>Compute sound propagation rays.</description>
     <dependencies>
+
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>h2gis</artifactId>
+            <version>${h2gis-version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
@@ -37,6 +44,13 @@
             <artifactId>h2gis-utilities</artifactId>
             <version>${h2gis-version}</version>
         </dependency>
+
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>${h2-version}</version>
+        </dependency>
+
         <dependency>
             <groupId>org.orbisgis</groupId>
             <artifactId>poly2tri-core</artifactId>
@@ -61,19 +75,15 @@
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
-            <version>1.6.4</version>
+            <version>1.7.30</version>
         </dependency>
         <dependency>
             <groupId>org.orbisgis</groupId>
             <artifactId>cts</artifactId>
-            <version>1.5.2</version>
+            <version>1.6.0-SNAPSHOT</version>
         </dependency>
-        <dependency>
-            <groupId>${project.groupId}</groupId>
-            <artifactId>h2gis</artifactId>
-            <version>${h2gis-version}</version>
-            <scope>test</scope>
-        </dependency>
+
+
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-simple</artifactId>
@@ -122,4 +132,5 @@
             </plugin>
         </plugins>
     </build>
+
 </project>

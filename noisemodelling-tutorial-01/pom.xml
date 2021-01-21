@@ -11,7 +11,7 @@
     <parent>
         <groupId>org.orbisgis</groupId>
         <artifactId>noisemodelling-parent</artifactId>
-        <version>3.3.1</version>
+        <version>4.0.0</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
     <description>Test case with OpenStreetMap buildings and roads</description>
@@ -36,6 +36,13 @@
             <artifactId>noisemodelling-jdbc</artifactId>
             <version>${project.version}</version>
         </dependency>
+
+        <dependency>
+            <groupId>org.osgi</groupId>
+            <artifactId>org.osgi.enterprise</artifactId>
+            <version>5.0.0</version>
+        </dependency>
+
         <dependency>
             <groupId>org.orbisgis</groupId>
             <artifactId>noisemodelling-pathfinder</artifactId>
@@ -51,11 +58,13 @@
             <artifactId>h2gis-api</artifactId>
             <version>${h2gis-version}</version>
         </dependency>
+
         <dependency>
             <groupId>org.orbisgis</groupId>
             <artifactId>h2gis-utilities</artifactId>
             <version>${h2gis-version}</version>
         </dependency>
+
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
@@ -66,6 +75,11 @@
             <groupId>org.orbisgis</groupId>
             <artifactId>postgis-jts-osgi</artifactId>
             <version>${h2gis-version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>${h2-version}</version>
         </dependency>
     </dependencies>
     <build>

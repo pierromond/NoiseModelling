@@ -23,6 +23,7 @@
 package org.noise_planet.noisemodelling.jdbc;
 
 import org.h2gis.utilities.JDBCUtilities;
+import org.h2gis.utilities.TableLocation;
 import org.noise_planet.noisemodelling.pathfinder.*;
 import org.noise_planet.noisemodelling.propagation.*;
 import org.noise_planet.noisemodelling.propagation.ComputeRaysOut;
@@ -60,7 +61,7 @@ public class LDENPointNoiseMapFactory implements PointNoiseMap.PropagationProces
     public void initialize(Connection connection, PointNoiseMap pointNoiseMap) throws SQLException {
         if(ldenConfig.input_mode == LDENConfig.INPUT_MODE.INPUT_MODE_LW_DEN) {
             // Fetch source fields
-            List<String> sourceField = JDBCUtilities.getFieldNames(connection.getMetaData(), pointNoiseMap.getSourcesTableName());
+            List<String> sourceField = JDBCUtilities.getColumnNames(connection, TableLocation.parse(pointNoiseMap.getSourcesTableName()));
             List<Integer> frequencyValues = new ArrayList<>();
             List<Integer> allFrequencyValues = Arrays.asList(PropagationProcessPathData.DEFAULT_FREQUENCIES_THIRD_OCTAVE);
             String period = "";

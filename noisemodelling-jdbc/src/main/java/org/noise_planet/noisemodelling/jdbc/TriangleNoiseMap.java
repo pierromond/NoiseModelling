@@ -1,7 +1,7 @@
 package org.noise_planet.noisemodelling.jdbc;
 
+import org.h2gis.utilities.GeometryTableUtilities;
 import org.h2gis.utilities.JDBCUtilities;
-import org.h2gis.utilities.SFSUtilities;
 import org.h2gis.utilities.TableLocation;
 import org.locationtech.jts.densify.Densifier;
 import org.locationtech.jts.geom.*;
@@ -240,7 +240,7 @@ public class TriangleNoiseMap extends JdbcNoiseMap {
 
     @Override
     protected Envelope getComputationEnvelope(Connection connection) throws SQLException {
-        return SFSUtilities.getTableEnvelope(connection, TableLocation.parse(sourcesTableName), "");
+        return GeometryTableUtilities.getEnvelope(connection, TableLocation.parse(sourcesTableName), "").getEnvelopeInternal();
     }
 
     public void generateReceivers(Connection connection, int cellI, int cellJ, String receiverTableName, String trianglesTableName, AtomicInteger receiverPK) throws SQLException, LayerDelaunayError, IOException {
@@ -302,11 +302,11 @@ public class TriangleNoiseMap extends JdbcNoiseMap {
         }
         nbreceivers += vertices.size();
 
-        if(!JDBCUtilities.tableExists(connection, receiverTableName)) {
+        if(!JDBCUtilities.tableExists(connection, TableLocation.parse(receiverTableName))) {
             Statement st = connection.createStatement();
             st.execute("CREATE TABLE "+TableLocation.parse(receiverTableName)+"(pk serial NOT NULL, the_geom geometry not null, PRIMARY KEY (PK))");
         }
-        if(!JDBCUtilities.tableExists(connection, trianglesTableName)) {
+        if(!JDBCUtilities.tableExists(connection, TableLocation.parse(trianglesTableName))) {
             Statement st = connection.createStatement();
             st.execute("CREATE TABLE "+TableLocation.parse(trianglesTableName)+"(pk serial NOT NULL, the_geom geometry , PK_1 integer not null, PK_2 integer not null, PK_3 integer not null, cell_id integer not null, PRIMARY KEY (PK))");
         }

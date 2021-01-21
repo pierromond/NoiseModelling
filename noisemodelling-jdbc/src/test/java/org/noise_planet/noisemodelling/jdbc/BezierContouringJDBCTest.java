@@ -4,7 +4,7 @@ import org.h2gis.functions.factory.H2GISDBFactory;
 import org.h2gis.functions.io.geojson.GeoJsonRead;
 import org.h2gis.functions.io.shp.SHPWrite;
 import org.h2gis.utilities.JDBCUtilities;
-import org.h2gis.utilities.SFSUtilities;
+import org.h2gis.utilities.TableLocation;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -15,6 +15,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 
+import static org.h2gis.utilities.JDBCUtilities.wrapConnection;
 import static org.junit.Assert.*;
 
 public class BezierContouringJDBCTest {
@@ -23,7 +24,7 @@ public class BezierContouringJDBCTest {
 
     @Before
     public void tearUp() throws Exception {
-        connection = SFSUtilities.wrapConnection(H2GISDBFactory.createSpatialDataBase(BezierContouringJDBCTest.class.getSimpleName(), true, ""));
+        connection = wrapConnection(H2GISDBFactory.createSpatialDataBase(BezierContouringJDBCTest.class.getSimpleName(), true, ""));
     }
 
     @After
@@ -36,8 +37,8 @@ public class BezierContouringJDBCTest {
 
     @Test
     public void testBezierContouring() throws SQLException, IOException {
-        GeoJsonRead.readGeoJson(connection, BezierContouringJDBCTest.class.getResource("lden_geom.geojson").getFile());
-        GeoJsonRead.readGeoJson(connection, BezierContouringJDBCTest.class.getResource("triangles.geojson").getFile());
+        GeoJsonRead.importTable(connection, BezierContouringJDBCTest.class.getResource("lden_geom.geojson").getFile());
+        GeoJsonRead.importTable(connection, BezierContouringJDBCTest.class.getResource("triangles.geojson").getFile());
         try(Statement st = connection.createStatement()) {
             st.execute("ALTER TABLE LDEN_GEOM ALTER COLUMN IDRECEIVER INTEGER NOT NULL");
             st.execute("ALTER TABLE LDEN_GEOM ADD PRIMARY KEY (IDRECEIVER)");
@@ -54,7 +55,7 @@ public class BezierContouringJDBCTest {
         bezierContouring.createTable(connection);
         System.out.println("Contouring done in " + (System.currentTimeMillis() - start) + " ms");
 
-        assertTrue(JDBCUtilities.tableExists(connection, "CONTOURING_NOISE_MAP"));
+        assertTrue(JDBCUtilities.tableExists(connection, TableLocation.parse("CONTOURING_NOISE_MAP")));
 
         List<String> fieldValues = JDBCUtilities.getUniqueFieldValues(connection, "CONTOURING_NOISE_MAP", "ISOLVL");
         assertTrue(fieldValues.contains("0"));
