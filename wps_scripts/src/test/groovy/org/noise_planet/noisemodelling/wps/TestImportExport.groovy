@@ -41,7 +41,9 @@ class TestImportExport extends JdbcTestCase {
         assertEquals("", res)
         // Import OSM file
         res = new Import_Symuvia().exec(connection,
-                ["pathFile": TestImportExport.getResource("symuvia.xml").getPath(),
+                ["pathFile": TestImportExport.getResource("Symuvia/symuvia.xml").getPath(),
+                 "tini": 20 ,
+                 "tend":  25 ,
                  "defaultSRID" : 2154])
 
         res = new Display_Database().exec(connection, [])

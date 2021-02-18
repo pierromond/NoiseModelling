@@ -6,6 +6,7 @@ package org.noise_planet.noisemodelling.wps.Import_and_Export
 
 import geoserver.GeoServer
 import geoserver.catalog.Store
+import groovy.sql.Sql
 import jdk.internal.org.xml.sax.SAXException
 import org.apache.commons.io.FilenameUtils
 import org.geotools.jdbc.JDBCDataStore
@@ -14,6 +15,8 @@ import org.h2gis.api.ProgressVisitor
 import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.TableLocation
 import org.h2gis.utilities.TableUtilities
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import org.xml.sax.InputSource
 import org.xml.sax.XMLReader
 import org.xml.sax.helpers.DefaultHandler
@@ -32,17 +35,19 @@ description = 'Import file into a database table (csv, dbf, geojson, gpx, bz2, g
 
 inputs = [pathFile       : [name: 'Path of the input File', description: 'Path of the input File (including extension .csv, .shp, etc.)', title: 'Path of the input File', type: String.class],
           databaseName   : [name: 'Name of the database', title: 'Name of the database', description: 'Name of the database (default : first found db)', min: 0, max: 1, type: String.class],
-          defaultSRID   : [name: 'Default SRID', title: 'Default SRID', description: 'If the layer does not include SRID properties, it will take this value (default : 4326)', min: 0, max: 1, type: Integer.class],
+          tini           : [name: 'T_ini', title: 'T_ini', description: 'Define the initial time step (default = 1)', min: 0, max: 1, type: String.class],
+          tend           : [name: 'T_end', title: 'T_end', description: 'Define the final time step (default = 100)', min: 0, max: 1, type: String.class],
+          defaultSRID    : [name: 'Default SRID', title: 'Default SRID', description: 'If the layer does not include SRID properties, it will take this value (default : 4326)', min: 0, max: 1, type: Integer.class],
           outputTableName: [name: 'outputTableName', description: 'Do not write the name of a table that contains a space. (default : file name without extension)', title: 'Name of output table', min: 0, max: 1, type: String.class]]
 
 outputs = [tableNameCreated: [name: 'tableNameCreated', title: 'tableNameCreated', type: String.class]]
 
 static Connection openGeoserverDataStoreConnection(String dbName) {
-    if(dbName == null || dbName.isEmpty()) {
+    if (dbName == null || dbName.isEmpty()) {
         dbName = new GeoServer().catalog.getStoreNames().get(0)
     }
     Store store = new GeoServer().catalog.getStore(dbName)
-    JDBCDataStore jdbcDataStore = (JDBCDataStore)store.getDataStoreInfo().getDataStore(null)
+    JDBCDataStore jdbcDataStore = (JDBCDataStore) store.getDataStoreInfo().getDataStore(null)
     return jdbcDataStore.getDataSource().getConnection()
 }
 
@@ -64,57 +69,89 @@ def run(input) {
 
 def exec(connection, input) {
 
+    // output string, the information given back to the user
+    String resultString = null
+
+    // Create a logger to display messages in the geoserver logs and in the command prompt.
+    Logger logger = LoggerFactory.getLogger("org.noise_planet.noisemodelling")
+
+    // print to command window
+    logger.info('Start : Import Symuvia File')
+    logger.info("inputs {}", input) // log inputs of the run
+
+    // Create a second sql connection to interact with the database in SQL
+    Sql sql = new Sql(connection)
 
     Integer defaultSRID = 4326
     if (input['defaultSRID']) {
         defaultSRID = input['defaultSRID'] as Integer
     }
 
+    int t_end = 100
+    if (input['tend']) {
+        t_end = Integer.valueOf(input['tend'])
+    }
+
+    int t_ini = 1
+    if (input['tini']) {
+        t_ini = Integer.valueOf(input['tini'])
+    }
 
 
-        String pathFile = input["pathFile"] as String
-        String fileName = FilenameUtils.removeExtension(new File(pathFile).getName())
+    String pathFile = input["pathFile"] as String
+    String fileName = FilenameUtils.removeExtension(new File(pathFile).getName())
 
-        String outputTableName = input["outputTableName"] as String
-        if (!outputTableName) {
-            outputTableName = fileName
-        }
-        outputTableName = outputTableName.toUpperCase()
+    String outputTableName = input["outputTableName"] as String
+    if (!outputTableName) {
+        outputTableName = fileName
+    }
+    outputTableName = outputTableName.toUpperCase()
 
-        Statement stmt = connection.createStatement()
-        String dropOutputTable = "drop table if exists " + outputTableName
-        stmt.execute(dropOutputTable)
+    sql.execute("drop table "+outputTableName+"_TRAJ if exists ")
+    sql.execute("drop table "+outputTableName+"_INST if exists ")
 
-        String ext = pathFile.substring(pathFile.lastIndexOf('.') + 1, pathFile.length())
-        switch (ext) {
-            case "xml":
-                SYMUVIADriverFunction symuviaDriver = new SYMUVIADriverFunction()
-                symuviaDriver.importFile(connection, outputTableName, new File(pathFile), new EmptyProgressVisitor())
-                break
-        }
+    Statement stmt = connection.createStatement()
+    String dropOutputTable = "drop table if exists " + outputTableName
+    stmt.execute(dropOutputTable)
 
-       /* int srid = SFSUtilities.getSRID(connection, TableLocation.parse(outputTableName+"_TRAJ"))
-        if(srid == 0) {
-            connection.createStatement().execute(String.format("UPDATE %s SET THE_GEOM = ST_SetSRID(the_geom,%d)",
-                    TableLocation.parse(outputTableName+"_TRAJ").toString(), defaultSRID))
+    String ext = pathFile.substring(pathFile.lastIndexOf('.') + 1, pathFile.length())
+    switch (ext) {
+        case "xml":
+            SYMUVIADriverFunction symuviaDriver = new SYMUVIADriverFunction()
+            symuviaDriver.importFile(connection, outputTableName, new File(pathFile), new EmptyProgressVisitor())
+            break
+    }
 
-        }*/
+    sql.execute("drop table temp2 if exists ;")
+    sql.execute("CREATE TABLE temp2 (pk int AUTO_INCREMENT PRIMARY KEY, the_geom geometry, ID_VEH int, SPEED double, \n"+
+            "ACC double, T int, veh_type char) as select NULL, ST_SETSRID(ST_MakePoint(traj.ABS, traj.ORD), 2154), traj.ID, traj.vit, traj.acc,\n"+
+            "traj.INST, traj.TYPE from "+outputTableName+"_TRAJ traj where traj.INST >="+t_ini+" AND traj.INST <="+t_end+"  ;")
 
-
-        def file = new File(pathFile)
-        String returnString = null
-
-        if (file.exists())
-        {
-            returnString = "The table " + outputTableName + " has been uploaded to database!"
-        }
-        else
-        {
-            returnString = "The input file is not found"
-        }
+    sql.execute("drop table "+outputTableName+"_TRAJ_"+t_ini+"_"+t_end+" if exists ")
+    sql.execute("create table "+outputTableName+"_TRAJ_"+t_ini+"_"+t_end+" as select * from temp2")
+    sql.execute("drop table temp2")
+    sql.execute("drop table "+outputTableName+"_INST if exists ")
 
 
-        return [tableNameCreated: returnString]
+    /* int srid = SFSUtilities.getSRID(connection, TableLocation.parse(outputTableName+"_TRAJ"))
+     if(srid == 0) {
+         connection.createStatement().execute(String.format("UPDATE %s SET THE_GEOM = ST_SetSRID(the_geom,%d)",
+                 TableLocation.parse(outputTableName+"_TRAJ").toString(), defaultSRID))
+
+     }*/
+
+
+    def file = new File(pathFile)
+    String returnString = null
+
+    if (file.exists()) {
+        returnString = "The table "+outputTableName +"_TRAJ_"+t_ini+"_"+t_end+" has been uploaded to database!"
+    } else {
+        returnString = "The input file is not found"
+    }
+
+
+    return [tableNameCreated: returnString]
 
 
 }
@@ -133,21 +170,20 @@ class SYMUVIADriverFunction {
      * @param tableReference prefix uses to store the SYMUVIA tables
      * @param fileName File path to read
      * @param progress
-     * @param deleteTables  true to delete the existing tables
+     * @param deleteTables true to delete the existing tables
      * @throws SQLException Table write error
      * @throws IOException File read error
      */
     void importFile(Connection connection, String tableReference, File fileName, ProgressVisitor progress, boolean deleteTables) throws SQLException, IOException {
-        if(fileName == null || !(fileName.getName().endsWith(".xml") )) {
+        if (fileName == null || !(fileName.getName().endsWith(".xml"))) {
             throw new IOException(new IllegalArgumentException("This driver handle only .xml files"))
         }
-        if(deleteTables){
+        if (deleteTables) {
             SYMUVIATablesFactory.dropSYMUVIATables(connection, JDBCUtilities.isH2DataBase(connection.getMetaData()), tableReference)
         }
         SYMUVIAParser symuviap = new SYMUVIAParser()
         symuviap.read(connection, tableReference, fileName, progress)
     }
-
 
 
     class InstSYMUVIAElement {
@@ -158,10 +194,9 @@ class SYMUVIADriverFunction {
          * Constructor
          * @param val Latitude value
          */
-         InstSYMUVIAElement(double val) {
+        InstSYMUVIAElement(double val) {
             this.val = val
         }
-
 
 
         /**
@@ -169,10 +204,9 @@ class SYMUVIADriverFunction {
          *
          * @return
          */
-         double getVAL() {
+        double getVAL() {
             return val
         }
-
 
 
     }
@@ -197,7 +231,7 @@ class SYMUVIADriverFunction {
         private long nodeCountProgress = 0;
         // For progression information return
         private static final int AVERAGE_NODE_SIZE = 500;
-        private double indice_val=0;
+        private double indice_val = 0;
 
         public SYMUVIAParser() {
 
@@ -235,9 +269,9 @@ class SYMUVIADriverFunction {
                 XMLReader parser = XMLReaderFactory.createXMLReader();
                 parser.setErrorHandler(this);
                 parser.setContentHandler(this);
-                if(inputFile.getName().endsWith(".xml")) {
+                if (inputFile.getName().endsWith(".xml")) {
                     parser.parse(new InputSource(fs));
-                } else{
+                } else {
                     throw new SQLException("Supported formats are .xml");
                 }
                 success = true;
@@ -276,7 +310,7 @@ class SYMUVIADriverFunction {
          * @throws SQLException
          */
         private void checkSYMUVIATables(Connection connection, boolean isH2, TableLocation requestedTable, String symuviaTableName) throws SQLException {
-            String[] omsTables = [SYMUVIATablesFactory.INST,SYMUVIATablesFactory.TRAJ]
+            String[] omsTables = [SYMUVIATablesFactory.INST, SYMUVIATablesFactory.TRAJ]
             for (String omsTableSuffix : omsTables) {
                 String symuviaTable = TableUtilities.caseIdentifier(requestedTable, symuviaTableName + omsTableSuffix, isH2);
                 if (JDBCUtilities.tableExists(connection, symuviaTable)) {
@@ -296,22 +330,22 @@ class SYMUVIADriverFunction {
          */
         private void createSYMUVIADatabaseModel(Connection connection, boolean isH2, TableLocation requestedTable, String symuviaTableName) throws SQLException {
             String instTableName = TableUtilities.caseIdentifier(requestedTable, symuviaTableName + SYMUVIATablesFactory.INST, isH2);
-            instPreparedStmt =  SYMUVIATablesFactory.createInstTable(connection, instTableName, isH2);
+            instPreparedStmt = SYMUVIATablesFactory.createInstTable(connection, instTableName, isH2);
             String trajTableName = TableUtilities.caseIdentifier(requestedTable, symuviaTableName + SYMUVIATablesFactory.TRAJ, isH2);
-            trajPreparedStmt =  SYMUVIATablesFactory.createTrajTable(connection, trajTableName, isH2);
+            trajPreparedStmt = SYMUVIATablesFactory.createTrajTable(connection, trajTableName, isH2);
         }
 
 
         @Override
         void startElement(String uri, String localName, String qName, Attributes attributes) throws SAXException {
-            if(progress.isCanceled()) {
+            if (progress.isCanceled()) {
                 throw new SAXException("Canceled by user");
             }
             if (localName.compareToIgnoreCase("INST") == 0) {
                 instSYMUVIAElement = new InstSYMUVIAElement(Double.valueOf(attributes.getValue("val")));
 
             } else if (localName.compareToIgnoreCase("TRAJ") == 0) {
-                trajSYMUVIAElement = new TrajSYMUVIAElement(Double.valueOf(attributes.getValue("abs")),Double.valueOf(attributes.getValue("acc")),Double.valueOf(attributes.getValue("dst")),Long.valueOf(attributes.getValue("id")),Double.valueOf(attributes.getValue("ord")),String.valueOf(attributes.getValue("type")),Double.valueOf(attributes.getValue("vit")));
+                trajSYMUVIAElement = new TrajSYMUVIAElement(Double.valueOf(attributes.getValue("abs")), Double.valueOf(attributes.getValue("acc")), Double.valueOf(attributes.getValue("dst")), Long.valueOf(attributes.getValue("id")), Double.valueOf(attributes.getValue("ord")), String.valueOf(attributes.getValue("type")), Double.valueOf(attributes.getValue("vit")));
             }
         }
 
@@ -333,7 +367,7 @@ class SYMUVIADriverFunction {
                 try {
 
                     instPreparedStmt.setObject(1, instSYMUVIAElement.getVAL());
-                    indice_val=instSYMUVIAElement.getVAL();
+                    indice_val = instSYMUVIAElement.getVAL();
                     instPreparedStmt.addBatch();
                     instPreparedStmtBatchSize++;
                 } catch (SQLException ex) {
@@ -360,7 +394,7 @@ class SYMUVIADriverFunction {
             } catch (SQLException ex) {
                 throw new SAXException("Could not insert sql batch", ex);
             }
-            if(nodeCountProgress++ % readFileSizeEachNode == 0) {
+            if (nodeCountProgress++ % readFileSizeEachNode == 0) {
                 // Update Progress
                 try {
                     progress.setStep((int) (((double) fc.position() / fileSize) * 100));
@@ -374,8 +408,9 @@ class SYMUVIADriverFunction {
             instPreparedStmtBatchSize = insertBatch(instPreparedStmt, instPreparedStmtBatchSize);
             trajPreparedStmtBatchSize = insertBatch(trajPreparedStmt, trajPreparedStmtBatchSize);
         }
+
         private int insertBatch(PreparedStatement st, int batchSize, int maxBatchSize) throws SQLException {
-            if(batchSize >= maxBatchSize) {
+            if (batchSize >= maxBatchSize) {
                 st.executeBatch();
                 return 0;
             } else {
@@ -388,7 +423,6 @@ class SYMUVIADriverFunction {
         }
 
 
-
     }
 
     /**
@@ -396,7 +430,7 @@ class SYMUVIADriverFunction {
      *
      * @author Pierre Aumond
      */
-     class TrajSYMUVIAElement {
+    class TrajSYMUVIAElement {
 
         private double abs
         private double acc
@@ -417,7 +451,7 @@ class SYMUVIADriverFunction {
          * @param type Longitude value
          * @param vit Longitude value
          */
-         TrajSYMUVIAElement(double abs, double acc, double dst,long id, double ord, String type,double vit) {
+        TrajSYMUVIAElement(double abs, double acc, double dst, long id, double ord, String type, double vit) {
             this.abs = abs
             this.acc = acc
             this.id = id
@@ -431,7 +465,7 @@ class SYMUVIADriverFunction {
          *
          * @return
          */
-         long getID() {
+        long getID() {
             return id
         }
 
@@ -441,19 +475,19 @@ class SYMUVIADriverFunction {
          * @param id
          */
 
-         double getABS() {
+        double getABS() {
             return abs
         }
 
-         double getACC() {
+        double getACC() {
             return acc
         }
 
-         double getDST() {
+        double getDST() {
             return dst
         }
 
-         double getORD() {
+        double getORD() {
             return ord
         }
 
@@ -475,10 +509,7 @@ class SYMUVIADriverFunction {
         }
 
 
-
-
     }
-
 
 
 /**
@@ -546,7 +577,6 @@ class SYMUVIADriverFunction {
         }
 
 
-
         /**
          * Drop the existing SYMUVIA tables used to store the imported SYMUVIA data
          *
@@ -559,7 +589,7 @@ class SYMUVIADriverFunction {
             TableLocation requestedTable = TableLocation.parse(tablePrefix, isH2)
             String symuviaTableName = requestedTable.getTable()
             String[] omsTables = String[INST, TRAJ]
-            StringBuilder sb =  new StringBuilder("drop table if exists ")
+            StringBuilder sb = new StringBuilder("drop table if exists ")
             String omsTableSuffix = omsTables[0]
             String symuviaTable = TableUtilities.caseIdentifier(requestedTable, symuviaTableName + omsTableSuffix, isH2)
             sb.append(symuviaTable)
