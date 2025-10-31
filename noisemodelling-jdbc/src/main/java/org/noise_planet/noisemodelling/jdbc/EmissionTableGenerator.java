@@ -23,7 +23,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.sql.Connection;
-import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -360,25 +359,8 @@ public class EmissionTableGenerator {
             // Keep original connection when unwrap is not supported
         }
 
-        boolean isPostgreSQL = false;
-        try {
-            DatabaseMetaData metaData = dialectConnection.getMetaData();
-            if (metaData != null) {
-                String product = metaData.getDatabaseProductName();
-                if (product != null) {
-                    isPostgreSQL = product.toLowerCase(Locale.ROOT).contains("postgres");
-                }
-            }
-        } catch (SQLException ignored) {
-            // metadata lookup failed, rely on DBUtils fallback below
-        }
-
-        if (!isPostgreSQL) {
-            DBTypes dbType = DBUtils.getDBType(dialectConnection);
-            isPostgreSQL = dbType == DBTypes.POSTGRESQL || dbType == DBTypes.POSTGIS;
-        }
-
-        DBTypes dbType = isPostgreSQL ? DBTypes.POSTGIS : DBTypes.H2GIS;
+        DBTypes dbType = DBUtils.getDBType(dialectConnection);
+        boolean isPostgreSQL = GeometrySqlHelper.isPostgreSQL(dbType);
 
         String doubleKeyword = isPostgreSQL ? "DOUBLE PRECISION" : "DOUBLE";
 

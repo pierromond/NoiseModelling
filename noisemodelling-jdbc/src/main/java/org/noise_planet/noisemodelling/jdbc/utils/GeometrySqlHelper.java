@@ -46,65 +46,104 @@ public final class GeometrySqlHelper {
 
     /**
      * Build the spatial predicate used for bounding box intersection queries.
-     * Must be paired with setGeometryParameter() to bind the parameters.
+     * 
+     * Uses the &amp;&amp; operator with ST_SetSRID(ST_GeomFromText(?), ?) which works
+     * on both H2GIS and PostGIS for spatial index optimization.
+     * 
+     * Must be paired with setGeometryParameter() to bind the WKT and SRID parameters.
+     * 
+     * <p>Example usage:</p>
+     * <pre>
+     * String predicate = GeometrySqlHelper.buildEnvelopePredicate(conn, "the_geom");
+     * String sql = "SELECT * FROM table WHERE " + predicate;
+     * PreparedStatement ps = conn.prepareStatement(sql);
+     * GeometrySqlHelper.setGeometryParameter(ps, 1, envelope, dbType);
+     * </pre>
+     * 
      * @param connection Active JDBC connection to detect database type
      * @param columnIdentifier Geometry column identifier (already quoted if necessary)
-     * @return Predicate string ready to be appended to a SQL WHERE clause
+     * @return Predicate string "column &amp;&amp; ST_SetSRID(ST_GeomFromText(?), ?)"
      * @throws SQLException if database type cannot be determined
      */
     public static String buildEnvelopePredicate(Connection connection, String columnIdentifier) throws SQLException {
-        DBTypes dbType = DBUtils.getDBType(resolveConnection(connection));
-        if (isPostgreSQL(dbType)) {
-            return columnIdentifier + " && ST_SetSRID(ST_GeomFromText(?), ?)";
-        }
-        return columnIdentifier + " && ?";
+        // Both H2GIS and PostGIS support this syntax with spatial index optimization
+        return columnIdentifier + " && ST_SetSRID(ST_GeomFromText(?), ?)";
     }
 
     /**
-     * Set a geometry parameter on a prepared statement in a database agnostic way.
+     * Set a geometry parameter on a prepared statement using WKT format.
+     * 
+     * This method uses WKT (Well-Known Text) format with ST_GeomFromText/ST_SetSRID,
+     * which works on both H2GIS and PostGIS, eliminating the need for database-specific code paths.
+     * 
+     * <p>Usage with geometryInsertExpression():</p>
+     * <pre>
+     * String sql = "INSERT INTO table (geom) VALUES (" + 
+     *              GeometrySqlHelper.geometryInsertExpression(dbType) + ")";
+     * PreparedStatement ps = conn.prepareStatement(sql);
+     * int nextIndex = GeometrySqlHelper.setGeometryParameter(ps, 1, myGeometry, dbType);
+     * ps.setString(nextIndex, "value");
+     * </pre>
+     * 
      * @param ps Prepared statement
      * @param parameterIndex Index (1-based) of the parameter to set
-     * @param geometry Geometry value (must not be null)
-     * @param dbType Database type
+     * @param geometry Geometry value (can be null)
+     * @param dbType Database type (can be null, will be detected from connection)
      * @return Next available parameter index after the geometry parameter(s)
      * @throws SQLException If the geometry value cannot be set
      */
     public static int setGeometryParameter(PreparedStatement ps, int parameterIndex, Geometry geometry, DBTypes dbType) throws SQLException {
-        // Use provided dbType if available, otherwise detect from connection
-        DBTypes actualDbType = dbType;
-        if (actualDbType == null) {
-            Connection conn = ps.getConnection();
-            actualDbType = DBUtils.getDBType(resolveConnection(conn));
+        if (geometry == null) {
+            return setNullGeometryParameter(ps, parameterIndex);
         }
         
-        if (geometry == null) {
-            if (isPostgreSQL(actualDbType)) {
-                ps.setNull(parameterIndex++, Types.VARCHAR);
-                ps.setNull(parameterIndex++, Types.INTEGER);
-            } else {
-                ps.setNull(parameterIndex++, Types.OTHER);
-            }
-            return parameterIndex;
-        }
-        if (isPostgreSQL(actualDbType)) {
-            ps.setString(parameterIndex++, WKT_WRITER.write(geometry));
-            int srid = geometry.getSRID();
-            if (srid <= 0 && geometry.getFactory() != null) {
-                srid = geometry.getFactory().getSRID();
-            }
-            ps.setInt(parameterIndex++, srid);
-        } else {
-            ps.setObject(parameterIndex++, geometry);
-        }
+        // Use WKT format - works on both H2GIS and PostGIS with ST_GeomFromText
+        ps.setString(parameterIndex++, WKT_WRITER.write(geometry));
+        ps.setInt(parameterIndex++, extractSRID(geometry));
         return parameterIndex;
+    }
+    
+    /**
+     * Set null geometry parameter (WKT text + SRID).
+     * Both parameters are set to NULL to match the ST_SetSRID(ST_GeomFromText(?, ?), ?) pattern.
+     * 
+     * @param ps Prepared statement
+     * @param parameterIndex Starting parameter index
+     * @return Next available parameter index
+     * @throws SQLException If parameters cannot be set
+     */
+    private static int setNullGeometryParameter(PreparedStatement ps, int parameterIndex) throws SQLException {
+        ps.setNull(parameterIndex++, Types.VARCHAR);  // WKT text
+        ps.setNull(parameterIndex++, Types.INTEGER);  // SRID
+        return parameterIndex;
+    }
+    
+    /**
+     * Extract SRID from geometry, falling back to geometry factory if needed.
+     * 
+     * @param geometry Geometry to extract SRID from
+     * @return SRID value (may be 0 if not set)
+     */
+    private static int extractSRID(Geometry geometry) {
+        int srid = geometry.getSRID();
+        if (srid <= 0 && geometry.getFactory() != null) {
+            srid = geometry.getFactory().getSRID();
+        }
+        return srid;
     }
 
     /**
-     * @param dbType Database type
-     * @return SQL expression to be used when inserting geometry values via prepared statements
+     * Get SQL expression for inserting geometry values via prepared statements.
+     * 
+     * Returns ST_SetSRID(ST_GeomFromText(?), ?) for both H2GIS and PostGIS,
+     * as both databases support this PostGIS-compatible syntax.
+     * 
+     * @param dbType Database type (unused, kept for API compatibility)
+     * @return SQL expression "ST_SetSRID(ST_GeomFromText(?), ?)"
      */
     public static String geometryInsertExpression(DBTypes dbType) {
-        return isPostgreSQL(dbType) ? "ST_SetSRID(ST_GeomFromText(?), ?)" : "?";
+        // Both H2GIS and PostGIS support this syntax
+        return "ST_SetSRID(ST_GeomFromText(?), ?)";
     }
 
     /**
@@ -125,6 +164,18 @@ public final class GeometrySqlHelper {
         // Check if it's already a JTS Geometry (H2GIS)
         if (geomObj instanceof Geometry) {
             return (Geometry) geomObj;
+        }
+        
+        // Check if it's a net.postgis.jdbc.PGgeometry (PostGIS JDBC extension)
+        // Use reflection to avoid hard dependency on postgis-jdbc
+        if (geomObj.getClass().getName().equals("net.postgis.jdbc.PGgeometry")) {
+            try {
+                // Call getGeometry() method to get JTS Geometry
+                java.lang.reflect.Method getGeometryMethod = geomObj.getClass().getMethod("getGeometry");
+                return (Geometry) getGeometryMethod.invoke(geomObj);
+            } catch (Exception e) {
+                throw new SQLException("Failed to extract geometry from PGgeometry object in column " + columnName, e);
+            }
         }
         
         // Otherwise, assume it's PostgreSQL PGobject and parse as WKB

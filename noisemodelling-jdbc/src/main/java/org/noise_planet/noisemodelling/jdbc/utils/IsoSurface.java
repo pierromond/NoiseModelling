@@ -375,23 +375,9 @@ public class IsoSurface {
         // First step
         // Smoothing of polygons
         GeometryFactory factory = new GeometryFactory(new PrecisionModel(), srid);
-        Connection detectionConnection;
-        try {
-            detectionConnection = connection.unwrap(Connection.class);
-        } catch (SQLException unwrapException) {
-            detectionConnection = connection;
-        }
+        Connection detectionConnection = GeometrySqlHelper.resolveConnection(connection);
         DBTypes dbType = DBUtils.getDBType(detectionConnection);
-        boolean isPostgreSQL;
-        try {
-            String productName = detectionConnection.getMetaData().getDatabaseProductName();
-            isPostgreSQL = productName != null && productName.toLowerCase(Locale.ROOT).contains("postgresql");
-            if (isPostgreSQL) {
-                dbType = DBTypes.POSTGRESQL;
-            }
-        } catch (SQLException metadataException) {
-            isPostgreSQL = dbType == DBTypes.POSTGRESQL;
-        }
+        boolean isPostgreSQL = GeometrySqlHelper.isPostgreSQL(dbType);
         final String periodColumn = aggregateByPeriod ? (isPostgreSQL ? "\"PERIOD\"" : "PERIOD") : null;
         if(smooth) {
             Quadtree segmentTree = new Quadtree();
@@ -454,11 +440,7 @@ public class IsoSurface {
         if(aggregateByPeriod) {
             insertQuery.append(", ?");
         }
-        if(isPostgreSQL) {
-            insertQuery.append(", ST_SetSRID(ST_GeomFromText(?), ?), ?, ?);");
-        } else {
-            insertQuery.append(", ?, ?, ?);");
-        }
+        insertQuery.append(", ").append(GeometrySqlHelper.geometryInsertExpression(dbType)).append(", ?, ?);");
         try(PreparedStatement ps = connection.prepareStatement(insertQuery.toString())) {
             for (Map.Entry<Short, ArrayList<Geometry>> entry : polys.entrySet()) {
                 ArrayList<Polygon> polygons = new ArrayList<>();
@@ -510,12 +492,7 @@ public class IsoSurface {
                     if(aggregateByPeriod) {
                         ps.setString(parameterIndex++, period);
                     }
-                    if(isPostgreSQL) {
-                        ps.setString(parameterIndex++, polygon.toText());
-                        ps.setInt(parameterIndex++, srid);
-                    } else {
-                        ps.setObject(parameterIndex++, polygon);
-                    }
+                    parameterIndex = GeometrySqlHelper.setGeometryParameter(ps, parameterIndex, polygon, dbType);
                     ps.setInt(parameterIndex++, entry.getKey());
                     ps.setString(parameterIndex++, isoLabels.get(entry.getKey()));
                     ps.addBatch();

@@ -11,6 +11,7 @@ import org.h2gis.utilities.dbtypes.DBTypes;
 import org.h2gis.utilities.dbtypes.DBUtils;
 import org.noise_planet.noisemodelling.jdbc.NoiseMapByReceiverMaker;
 import org.noise_planet.noisemodelling.jdbc.input.DefaultTableLoader;
+import org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper;
 import org.noise_planet.noisemodelling.jdbc.utils.IsoSurface;
 import org.noise_planet.noisemodelling.jdbc.DelaunayReceiversMaker;
 import org.noise_planet.noisemodelling.pathfinder.delaunay.LayerDelaunayError;
@@ -130,7 +131,12 @@ class Main {
         noiseMapByReceiverMaker.run(connection, progressLogger);
 
         logger.info("Create iso contours");
-        int srid = GeometryTableUtilities.getSRID(connection, TableLocation.parse("LW_ROADS", DBTypes.H2GIS));
+        int srid;
+        if (GeometrySqlHelper.isPostgreSQL(dbType)) {
+            srid = GeometrySqlHelper.getTableSRID(connection, TableLocation.parse("LW_ROADS", dbType));
+        } else {
+            srid = GeometryTableUtilities.getSRID(connection, TableLocation.parse("LW_ROADS", dbType));
+        }
         List<Double> isoLevels = IsoSurface.NF31_133_ISO; // default values
         IsoSurface isoSurface = new IsoSurface(isoLevels, srid);
         isoSurface.setSmoothCoefficient(0.5);
