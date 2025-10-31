@@ -23,10 +23,13 @@ import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.SpatialResultSet
 import org.h2gis.utilities.TableLocation
+import org.h2gis.utilities.dbtypes.DBTypes
+import org.h2gis.utilities.dbtypes.DBUtils
 import org.h2gis.utilities.wrapper.ConnectionWrapper
 import org.locationtech.jts.geom.*
 import org.noise_planet.noisemodelling.emission.road.cnossosvar.RoadVehicleCnossosvar
 import org.noise_planet.noisemodelling.emission.road.cnossosvar.RoadVehicleCnossosvarParameters
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 
 import java.security.InvalidParameterException
 import java.sql.Connection
@@ -110,6 +113,15 @@ def exec(Connection connection, input) {
     // Get every inputs
     // -------------------
 
+    // Get DBTypes for proper table/column name handling
+    DBTypes dbType = DBUtils.getDBType(connection)
+    
+    // Define column names - use TableLocation.quoteIdentifier WITHOUT dbType to always quote
+    // This ensures PostgreSQL preserves uppercase column names
+    // H2GIS ignores quotes (case-insensitive), so quoting doesn't hurt
+    String periodCol = TableLocation.quoteIdentifier("PERIOD")
+    String idsourceCol = TableLocation.quoteIdentifier("IDSOURCE")
+
     int duration = 60
     if (input['duration']) {
         duration = Integer.valueOf(input['duration'] as String)
@@ -132,33 +144,71 @@ def exec(Connection connection, input) {
         method = input['method'] as String
     }
 
+    // Use as-is from user - databases handle case naturally
     String sources_table_name = input['tableRoads']
-    // do it case-insensitive
-    sources_table_name = sources_table_name.toUpperCase()
-    // Check if srid are in metric projection.
-    int sridSources = GeometryTableUtilities.getSRID(connection, TableLocation.parse(sources_table_name))
+    
+    // Normalize for H2GIS utility method calls
+    String sources_table_name_for_utils = DatabaseHelper.normalizeTableNameForUtilities(connection, sources_table_name)
+    
+    // Check if srid are in metric projection - use cross-database compatible method
+    int sridSources
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        sridSources = sql.firstRow("SELECT ST_SRID(the_geom) as srid FROM " + sources_table_name + " LIMIT 1")?.srid as Integer ?: 0
+    } else {
+        sridSources = GeometryTableUtilities.getSRID(connection, TableLocation.parse(sources_table_name_for_utils))
+    }
+    
     if (sridSources == 3785 || sridSources == 4326) throw new IllegalArgumentException("Error : Please use a metric projection for "+sources_table_name+".")
     if (sridSources == 0) throw new IllegalArgumentException("Error : The table "+sources_table_name+" does not have an associated SRID.")
 
     System.out.println('Start  time : ' + TimeCategory.minus(new Date(), start))
 
     sql.execute("DROP TABLE IF EXISTS ROAD_POINTS" )
-    sql.execute("CREATE TABLE ROAD_POINTS(ROAD_ID serial, THE_GEOM geometry, LV int, LV_SPD real, HV int, HV_SPD real) AS SELECT r.PK, ST_Tomultipoint(ST_Densify(the_geom, "+gridStep+")), r.LV_D, r.LV_SPD_D, r.HGV_D, r.HGV_SPD_D FROM  "+sources_table_name+" r WHERE NOT ST_IsEmpty(r.THE_GEOM) ;")
+    
+    // Create ROAD_POINTS with cross-database compatible syntax
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        // PostgreSQL: CREATE TABLE AS SELECT, then ALTER to add SERIAL
+        // Use ST_Segmentize + ST_Points in PostgreSQL (equivalent to H2GIS ST_Densify + ST_ToMultiPoint)
+        sql.execute("CREATE TABLE ROAD_POINTS AS SELECT r.PK as ROAD_ID, ST_Points(ST_Segmentize(the_geom, " + gridStep + ")) as THE_GEOM, r.LV_D as LV, r.LV_SPD_D as LV_SPD, r.HGV_D as HV, r.HGV_SPD_D as HV_SPD FROM  " + sources_table_name + " r WHERE NOT ST_IsEmpty(r.THE_GEOM);")
+    } else {
+        // H2GIS: can define columns with types in CREATE TABLE ... AS SELECT
+        sql.execute("CREATE TABLE ROAD_POINTS(ROAD_ID serial, THE_GEOM geometry, LV int, LV_SPD real, HV int, HV_SPD real) AS SELECT r.PK, ST_Tomultipoint(ST_Densify(the_geom, " + gridStep + ")), r.LV_D, r.LV_SPD_D, r.HGV_D, r.HGV_SPD_D FROM  " + sources_table_name + " r WHERE NOT ST_IsEmpty(r.THE_GEOM) ;")
+    }
 
-    sql.execute("drop table SOURCES_GEOM if exists;" +
-            "create table SOURCES_GEOM as SELECT ST_UpdateZ(the_geom,0.05) the_geom,ROAD_ID, LV , LV_SPD , HV , HV_SPD from ST_Explode('ROAD_POINTS');" +
-            "alter table SOURCES_GEOM add PK INT AUTO_INCREMENT  PRIMARY KEY;")
+    // Create SOURCES_GEOM with cross-database compatible AUTO_INCREMENT/SERIAL
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        // PostGIS: Use ST_Dump to explode + ST_Translate to set Z coordinate
+        sql.execute("drop table if exists SOURCES_GEOM;" +
+                "create table SOURCES_GEOM as SELECT ST_Translate((ST_Dump(the_geom)).geom, 0, 0, 0.05) the_geom, ROAD_ID, LV, LV_SPD, HV, HV_SPD from ROAD_POINTS;" +
+                "alter table SOURCES_GEOM add PK SERIAL PRIMARY KEY;")
+        // Ensure SRID is preserved on PostgreSQL
+        DatabaseHelper.ensureSRID(connection, "SOURCES_GEOM", "the_geom", sridSources)
+    } else {
+        // H2GIS: Use ST_Explode + ST_UpdateZ
+        sql.execute("drop table SOURCES_GEOM if exists;" +
+                "create table SOURCES_GEOM as SELECT ST_UpdateZ(the_geom,0.05) the_geom,ROAD_ID, LV , LV_SPD , HV , HV_SPD from ST_Explode('ROAD_POINTS');" +
+                "alter table SOURCES_GEOM add PK INT AUTO_INCREMENT PRIMARY KEY;")
+    }
     sql.execute("DROP TABLE IF EXISTS ROAD_POINTS")
-
 
     if (method.equalsIgnoreCase("PROBA")){
         System.println("Create the random road traffic table over the number of iterations... ")
 
-        sql.execute("drop table VEHICLES_PROBA IF EXISTS;" +
-                "create table VEHICLES_PROBA AS SELECT *,case when LV_SPD  < 20 then 0.001*LV/20 else 0.001*LV/LV_SPD end  LV_DENS_D, case when HV_SPD  < 20 then 0.001*HV/20 else 0.001*HV/HV_SPD end HGV_DENS_D  FROM SOURCES_GEOM ;" +
-                "alter table VEHICLES_PROBA add LENGTH double as select ST_LENGTH(the_geom) ;" +
-                "ALTER TABLE VEHICLES_PROBA ALTER COLUMN LV_DENS_D double;" +
-                "ALTER TABLE VEHICLES_PROBA ALTER COLUMN HGV_DENS_D double;" )
+        if (DatabaseHelper.isPostgreSQL(connection)) {
+            // PostgreSQL: DROP TABLE IF EXISTS + computed column via UPDATE
+            sql.execute("DROP TABLE IF EXISTS VEHICLES_PROBA;")
+            sql.execute("CREATE TABLE VEHICLES_PROBA AS SELECT *, " +
+                    "CASE WHEN LV_SPD < 20 THEN 0.001*LV/20 ELSE 0.001*LV/LV_SPD END AS LV_DENS_D, " +
+                    "CASE WHEN HV_SPD < 20 THEN 0.001*HV/20 ELSE 0.001*HV/HV_SPD END AS HGV_DENS_D, " +
+                    "ST_LENGTH(the_geom) AS LENGTH FROM SOURCES_GEOM;")
+        } else {
+            // H2GIS: drop table ... if exists + computed column syntax
+            sql.execute("drop table VEHICLES_PROBA IF EXISTS;" +
+                    "create table VEHICLES_PROBA AS SELECT *,case when LV_SPD  < 20 then 0.001*LV/20 else 0.001*LV/LV_SPD end  LV_DENS_D, case when HV_SPD  < 20 then 0.001*HV/20 else 0.001*HV/HV_SPD end HGV_DENS_D  FROM SOURCES_GEOM ;" +
+                    "alter table VEHICLES_PROBA add LENGTH double as select ST_LENGTH(the_geom) ;" +
+                    "ALTER TABLE VEHICLES_PROBA ALTER COLUMN LV_DENS_D double;" +
+                    "ALTER TABLE VEHICLES_PROBA ALTER COLUMN HGV_DENS_D double;" )
+        }
 
         IndividualVehicleEmissionProcessData probabilisticProcessData = new IndividualVehicleEmissionProcessData();
         probabilisticProcessData.setDynamicEmissionTable("VEHICLES_PROBA", sql)
@@ -167,8 +217,8 @@ def exec(Connection connection, input) {
         // random number > Vehicle or not / Light of Heavy
         //
         sql.execute("drop table if exists SOURCES_EMISSION;")
-        sql.execute("create table SOURCES_EMISSION(PERIOD varchar, IDSOURCE integer, HZ63 double precision, HZ125 double precision, HZ250 double precision, HZ500 double precision, HZ1000 double precision, HZ2000 double precision, HZ4000 double precision, HZ8000 double precision);")
-        def qry = 'INSERT INTO SOURCES_EMISSION(PERIOD, IDSOURCE, HZ63, HZ125, HZ250, HZ500, HZ1000, HZ2000, HZ4000, HZ8000) VALUES (?,?,?,?,?,?,?,?,?,?);'
+        sql.execute("create table SOURCES_EMISSION(" + periodCol + " varchar, " + idsourceCol + " integer, HZ63 double precision, HZ125 double precision, HZ250 double precision, HZ500 double precision, HZ1000 double precision, HZ2000 double precision, HZ4000 double precision, HZ8000 double precision);")
+        def qry = "INSERT INTO SOURCES_EMISSION(" + periodCol + ", " + idsourceCol + ", HZ63, HZ125, HZ250, HZ500, HZ1000, HZ2000, HZ4000, HZ8000) VALUES (?,?,?,?,?,?,?,?,?,?);"
 
         int nCarsPos = probabilisticProcessData.getCarsPositions()
         k = 0
@@ -197,7 +247,7 @@ def exec(Connection connection, input) {
     } else {
 
         sql.execute("DROP TABLE IF EXISTS SOURCES_EMISSION")
-        sql.execute("CREATE TABLE SOURCES_EMISSION(PERIOD VARCHAR NOT NULL, IDSOURCE int not null, HZ63 real, HZ125 real, HZ250 real, HZ500 real, HZ1000 real, HZ2000 real, HZ4000 real, HZ8000 real)")
+        sql.execute("CREATE TABLE SOURCES_EMISSION(" + periodCol + " VARCHAR NOT NULL, " + idsourceCol + " int not null, HZ63 real, HZ125 real, HZ250 real, HZ500 real, HZ1000 real, HZ2000 real, HZ4000 real, HZ8000 real)")
 
         String insert = "INSERT INTO SOURCES_EMISSION VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
@@ -258,9 +308,15 @@ def exec(Connection connection, input) {
             }
         })
     }
-    sql.execute("CREATE INDEX ON SOURCES_EMISSION(PERIOD, IDSOURCE)")
-    sql.execute("drop table VEHICLES_PROBA if exists;")
-
+    // Use capsIdentifier for column names in index creation
+    sql.execute("CREATE INDEX ON SOURCES_EMISSION(" + periodCol + ", " + idsourceCol + ")")
+    
+    // Cross-database DROP TABLE syntax
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        sql.execute("DROP TABLE IF EXISTS VEHICLES_PROBA;")
+    } else {
+        sql.execute("drop table VEHICLES_PROBA if exists;")
+    }
 
     System.out.println('Intermediate  time : ' + TimeCategory.minus(new Date(), start))
     System.out.println("Export data to table")

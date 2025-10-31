@@ -34,28 +34,34 @@ import org.locationtech.jts.geom.GeometryFactory
 import org.noise_planet.noisemodelling.scripts.Geometric_Tools.Clean_Buildings_Table
 import org.noise_planet.noisemodelling.scripts.Import_and_Export.Import_File
 import org.noise_planet.noisemodelling.scripts.Receivers.*
+import org.noise_planet.noisemodelling.scripts.TestSupport.DatabaseTestHelper
 
 import java.nio.file.Path
 import java.sql.Connection
+import java.util.UUID
 
 import static org.junit.jupiter.api.Assertions.*
 
 
 
-class TestReceivers{
-    private Connection connection;
+class TestReceivers {
+    private Connection connection
 
     @BeforeEach
-    void tearUp(TestInfo testInfo) throws Exception {
-        connection = JDBCUtilities.wrapConnection(H2GISDBFactory.createSpatialDataBase(testInfo.getDisplayName(), true, ""));
+    void beforeEach(TestInfo testInfo) throws Exception {
+        String testName = testInfo?.getDisplayName() ?: "test"
+        String dbName = "testdb_" + testName.replaceAll("[^A-Za-z0-9]", "_") + "_" + UUID.randomUUID().toString().substring(0, 8)
+        connection = H2GISDBFactory.createSpatialDataBase(dbName, true)
     }
 
     @AfterEach
     void tearDown() throws Exception {
-        if (connection != null) {
-            connection.close();
+        if (connection != null && !connection.isClosed()) {
+            connection.close()
         }
+        connection = null
     }
+
     @Test
     void testBuildingGrid3D() {
         def sql = new Sql(connection)

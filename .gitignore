@@ -11,3 +11,11 @@ profile_*.csv
 venv/
 .DS_Store
 
+# PostGIS Docker
+.pgadmin/
+pgadmin_data/
+postgis_data/
+
+# GitHub Copilot development instructions
+.github/copilot-instructions.md
+

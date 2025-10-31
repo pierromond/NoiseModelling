@@ -17,13 +17,10 @@ import org.h2gis.utilities.dbtypes.DBUtils;
 import org.locationtech.jts.geom.*;
 import org.noise_planet.noisemodelling.jdbc.input.DefaultTableLoader;
 import org.noise_planet.noisemodelling.jdbc.utils.CellIndex;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper;
 
 import java.sql.*;
 
-import static org.h2gis.utilities.GeometryTableUtilities.getGeometryColumnNames;
-import static org.h2gis.utilities.GeometryTableUtilities.getSRID;
 /**
  * Common attributes and functions across DelaunayGrid and NoiseMap receiver computation
  * @author Nicolas Fortin
@@ -149,10 +146,10 @@ public abstract class GridMapMaker {
         int srid = 0;
         DBTypes dbTypes = DBUtils.getDBType(connection.unwrap(Connection.class));
         if(!sourcesTableName.isEmpty()) {
-            srid = getSRID(connection, TableLocation.parse(sourcesTableName, dbTypes));
+            srid = GeometrySqlHelper.getTableSRID(connection, TableLocation.parse(sourcesTableName, dbTypes));
         }
         if(srid == 0) {
-            srid = getSRID(connection, TableLocation.parse(buildingTableParameters.buildingsTableName, dbTypes));
+            srid = GeometrySqlHelper.getTableSRID(connection, TableLocation.parse(buildingTableParameters.buildingsTableName, dbTypes));
         }
         geometryFactory = new GeometryFactory(new PrecisionModel(), srid);
 

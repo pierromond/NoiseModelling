@@ -20,7 +20,8 @@ import groovy.io.FileType
 import org.apache.commons.io.FilenameUtils
 import org.h2gis.functions.io.utility.PRJUtil
 import org.noise_planet.noisemodelling.jdbc.utils.AscReaderDriver
-import org.noise_planet.noisemodelling.pathfinder.utils.profiler.RootProgressVisitor;
+import org.noise_planet.noisemodelling.pathfinder.utils.profiler.RootProgressVisitor
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -156,7 +157,8 @@ def exec(Connection connection, input) {
     }
 
     logger.info("Create spatial index on "+ outputTableName )
-    stmt.execute("Create spatial index on "+outputTableName+"(the_geom);")
+    // Create spatial index (cross-database compatible)
+    DatabaseHelper.createSpatialIndex(connection, outputTableName, 'the_geom')
 
     resultString = "The table(s) DEM has/have been uploaded to database !"
 

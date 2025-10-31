@@ -24,11 +24,13 @@ import org.h2gis.utilities.TableLocation
 import org.h2gis.utilities.dbtypes.DBTypes
 import org.h2gis.utilities.dbtypes.DBUtils
 import org.h2gis.utilities.wrapper.ConnectionWrapper
+import org.locationtech.jts.geom.Envelope
 import org.noise_planet.noisemodelling.jdbc.NoiseMapByReceiverMaker
 import org.noise_planet.noisemodelling.jdbc.NoiseMapDatabaseParameters
 import org.noise_planet.noisemodelling.jdbc.input.DefaultTableLoader
 import org.noise_planet.noisemodelling.pathfinder.utils.profiler.RootProgressVisitor
 import org.noise_planet.noisemodelling.propagation.AttenuationParameters
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -326,78 +328,78 @@ def exec(Connection connection, Map input) {
     // Get every inputs
     // -------------------
 
-    String sources_table_name = input['tableRoads']
-    // do it case-insensitive
-    sources_table_name = sources_table_name.toUpperCase()
-    // Check if srid are in metric projection.
-    int sridSources = GeometryTableUtilities.getSRID(connection, TableLocation.parse(sources_table_name))
+    // Get table names and parse them into TableLocation objects
+    String sources_table_name = TableLocation.capsIdentifier(input['tableRoads'] as String, dbType)
+    TableLocation sourcesTableLoc = TableLocation.parse(sources_table_name, dbType)
+    
+    // Check if srid are in metric projection
+    int sridSources = DatabaseHelper.getTableSRID(connection, sources_table_name, 'the_geom')
     if (sridSources == 3785 || sridSources == 4326) throw new IllegalArgumentException("Error : Please use a metric projection for "+sources_table_name+".")
     if (sridSources == 0) throw new IllegalArgumentException("Error : The table "+sources_table_name+" does not have an associated SRID.")
 
     //Get the geometry field of the source table
-    TableLocation sourceTableIdentifier = TableLocation.parse(sources_table_name)
-    List<String> geomFields = GeometryTableUtilities.getGeometryColumnNames(connection, sourceTableIdentifier)
+    List<String> geomFields = GeometryTableUtilities.getGeometryColumnNames(connection, sourcesTableLoc)
     if (geomFields.isEmpty()) {
-        throw new SQLException(String.format("The table %s does not exists or does not contain a geometry field", sourceTableIdentifier))
+        throw new SQLException(String.format("The table %s does not exists or does not contain a geometry field", sourcesTableLoc))
     }
 
-    //Get the primary key field of the source table
-    int pkIndex = JDBCUtilities.getIntegerPrimaryKey(connection, TableLocation.parse(sources_table_name))
+    //Get the primary key field of the source table (cross-database compatible)
+    int pkIndex = DatabaseHelper.getIntegerPrimaryKey(connection, sources_table_name)
     if (pkIndex < 1) {
-        throw new IllegalArgumentException(String.format("Source table %s does not contain a primary key", sourceTableIdentifier))
+        throw new IllegalArgumentException(String.format("Source table %s does not contain a primary key", sourcesTableLoc))
     }
 
-    String receivers_table_name = input['tableReceivers']
-    // do it case-insensitive
-    receivers_table_name = receivers_table_name.toUpperCase()
+    String receivers_table_name = TableLocation.capsIdentifier(input['tableReceivers'] as String, dbType)
+    TableLocation receiversTableLoc = TableLocation.parse(receivers_table_name, dbType)
+    
     //Get the geometry field of the receiver table
-    TableLocation receiverTableIdentifier = TableLocation.parse(receivers_table_name)
-    List<String> geomFieldsRcv = GeometryTableUtilities.getGeometryColumnNames(connection, receiverTableIdentifier)
+    List<String> geomFieldsRcv = GeometryTableUtilities.getGeometryColumnNames(connection, receiversTableLoc)
     if (geomFieldsRcv.isEmpty()) {
-        throw new SQLException(String.format("The table %s does not exists or does not contain a geometry field", receiverTableIdentifier))
+        throw new SQLException(String.format("The table %s does not exists or does not contain a geometry field", receiversTableLoc))
     }
-    // Check if srid are in metric projection and are all the same.
-    int sridReceivers = GeometryTableUtilities.getSRID(connection, TableLocation.parse(receivers_table_name))
+    
+    // Check if srid are in metric projection and are all the same
+    int sridReceivers = DatabaseHelper.getTableSRID(connection, receivers_table_name, 'the_geom')
     if (sridReceivers == 3785 || sridReceivers == 4326) throw new IllegalArgumentException("Error : Please use a metric projection for "+receivers_table_name+".")
     if (sridReceivers == 0) throw new IllegalArgumentException("Error : The table "+receivers_table_name+" does not have an associated SRID.")
     if (sridReceivers != sridSources) throw new IllegalArgumentException("Error : The SRID of table "+sources_table_name+" and "+receivers_table_name+" are not the same.")
 
 
-    //Get the primary key field of the receiver table
-    int pkIndexRecv = JDBCUtilities.getIntegerPrimaryKey(connection, TableLocation.parse(receivers_table_name))
+    //Get the primary key field of the receiver table (cross-database compatible)
+    int pkIndexRecv = DatabaseHelper.getIntegerPrimaryKey(connection, receivers_table_name)
     if (pkIndexRecv < 1) {
-        throw new IllegalArgumentException(String.format("Source table %s does not contain a primary key", receiverTableIdentifier))
+        throw new IllegalArgumentException(String.format("Source table %s does not contain a primary key", receiversTableLoc))
     }
 
-    String building_table_name = input['tableBuilding']
-    // do it case-insensitive
-    building_table_name = building_table_name.toUpperCase()
-    // Check if srid are in metric projection and are all the same.
-    int sridBuildings = GeometryTableUtilities.getSRID(connection, TableLocation.parse(building_table_name))
-    if (sridBuildings == 3785 || sridReceivers == 4326) throw new IllegalArgumentException("Error : Please use a metric projection for "+building_table_name+".")
+    String building_table_name = TableLocation.capsIdentifier(input['tableBuilding'] as String, dbType)
+    TableLocation buildingsTableLoc = TableLocation.parse(building_table_name, dbType)
+    
+    // Check if srid are in metric projection and are all the same
+    int sridBuildings = DatabaseHelper.getTableSRID(connection, building_table_name, 'the_geom')
+    if (sridBuildings == 3785 || sridBuildings == 4326) throw new IllegalArgumentException("Error : Please use a metric projection for "+building_table_name+".")
     if (sridBuildings == 0) throw new IllegalArgumentException("Error : The table "+building_table_name+" does not have an associated SRID.")
     if (sridReceivers != sridBuildings) throw new IllegalArgumentException("Error : The SRID of table "+building_table_name+" and "+receivers_table_name+" are not the same.")
 
     String dem_table_name = ""
+    TableLocation demTableLoc = null
     if (input['tableDEM']) {
-        dem_table_name = input['tableDEM']
-        // do it case-insensitive
-        dem_table_name = dem_table_name.toUpperCase()
-        // Check if srid are in metric projection and are all the same.
-        int sridDEM = GeometryTableUtilities.getSRID(connection, TableLocation.parse(dem_table_name))
-        if (sridDEM == 3785 || sridReceivers == 4326) throw new IllegalArgumentException("Error : Please use a metric projection for "+dem_table_name+".")
+        dem_table_name = TableLocation.capsIdentifier(input['tableDEM'] as String, dbType)
+        demTableLoc = TableLocation.parse(dem_table_name, dbType)
+        
+        int sridDEM = DatabaseHelper.getTableSRID(connection, dem_table_name, 'the_geom')
+        if (sridDEM == 3785 || sridDEM == 4326) throw new IllegalArgumentException("Error : Please use a metric projection for "+dem_table_name+".")
         if (sridDEM == 0) throw new IllegalArgumentException("Error : The table "+dem_table_name+" does not have an associated SRID.")
         if (sridDEM != sridSources) throw new IllegalArgumentException("Error : The SRID of table "+sources_table_name+" and "+dem_table_name+" are not the same.")
     }
 
     String ground_table_name = ""
+    TableLocation groundTableLoc = null
     if (input['tableGroundAbs']) {
-        ground_table_name = input['tableGroundAbs']
-        // do it case-insensitive
-        ground_table_name = ground_table_name.toUpperCase()
-        // Check if srid are in metric projection and are all the same.
-        int sridGROUND = GeometryTableUtilities.getSRID(connection, TableLocation.parse(ground_table_name))
-        if (sridGROUND == 3785 || sridReceivers == 4326) throw new IllegalArgumentException("Error : Please use a metric projection for "+ground_table_name+".")
+        ground_table_name = TableLocation.capsIdentifier(input['tableGroundAbs'] as String, dbType)
+        groundTableLoc = TableLocation.parse(ground_table_name, dbType)
+        
+        int sridGROUND = DatabaseHelper.getTableSRID(connection, ground_table_name, 'the_geom')
+        if (sridGROUND == 3785 || sridGROUND == 4326) throw new IllegalArgumentException("Error : Please use a metric projection for "+ground_table_name+".")
         if (sridGROUND == 0) throw new IllegalArgumentException("Error : The table "+ground_table_name+" does not have an associated SRID.")
         if (sridGROUND != sridSources) throw new IllegalArgumentException("Error : The SRID of table "+ground_table_name+" and "+sources_table_name+" are not the same.")
     }
@@ -405,8 +407,6 @@ def exec(Connection connection, Map input) {
     String tableSourceDirectivity = ""
     if (input['tableSourceDirectivity']) {
         tableSourceDirectivity = input['tableSourceDirectivity']
-        // do it case-insensitive
-        tableSourceDirectivity = tableSourceDirectivity.toUpperCase()
     }
 
     boolean recordProfile = false
@@ -557,6 +557,26 @@ def exec(Connection connection, Map input) {
     // Do not propagate for low emission or far away sources
     // Maximum error in dB
     parameters.setMaximumError(confMaxError)
+
+    // --------------------------------------------
+    // Pre-compute envelope for PostgreSQL compatibility
+    // --------------------------------------------
+    
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        // GeometryTableUtilities.getEnvelope() has PGobject cast issues
+        // Pre-compute envelope using DatabaseHelper and set it manually
+        def sourcesGeom = DatabaseHelper.getTableEnvelope(connection, sources_table_name, 'the_geom')
+        def receiversGeom = DatabaseHelper.getTableEnvelope(connection, receivers_table_name, 'the_geom')
+        def buildingsGeom = DatabaseHelper.getTableEnvelope(connection, building_table_name, 'the_geom')
+        
+        // Convert Geometry to Envelope and combine
+        Envelope sourcesEnvelope = sourcesGeom.getEnvelopeInternal()
+        sourcesEnvelope.expandToInclude(receiversGeom.getEnvelopeInternal())
+        sourcesEnvelope.expandToInclude(buildingsGeom.getEnvelopeInternal())
+        
+        // Set the main envelope to avoid internal getEnvelope() calls
+        pointNoiseMap.setMainEnvelope(sourcesEnvelope)
+    }
 
     // --------------------------------------------
     // Run Calculations

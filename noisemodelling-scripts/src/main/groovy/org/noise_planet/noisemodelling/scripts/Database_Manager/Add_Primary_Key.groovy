@@ -18,6 +18,7 @@ package org.noise_planet.noisemodelling.scripts.Database_Manager
 
 import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.TableLocation
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -68,39 +69,85 @@ def exec(Connection connection, input) {
     // print to command window
     logger.info('Start : Add primary key column or constraint')
 
-    // Get name of the table
+    // Get name of the table (use as-is - databases handle case naturally)
     String table = input["tableName"] as String
-    // do it case-insensitive
-    table = table.toUpperCase()
 
-    // Get name of the pk field
+    // Get name of the pk field (use as-is - databases handle case naturally)
     String pkName = input['pkName'] as String
-    // do it case-insensitive
-    pkName = pkName.toUpperCase()
 
     // Create a connection statement to interact with the database in SQL
     Statement stmt = connection.createStatement()
 
+    // Normalize for H2GIS utility method calls
+    String table_for_utils = DatabaseHelper.normalizeTableNameForUtilities(connection, table)
+    
+    // Check if PostgreSQL for database-specific syntax
+    boolean isPostgreSQL = DatabaseHelper.isPostgreSQL(connection)
+    
     // get the index of the primary key column (if exists > 0)
-    int pkIndex = JDBCUtilities.getIntegerPrimaryKey(connection, TableLocation.parse(table))
+    int pkIndex
+    if (isPostgreSQL) {
+        // For PostgreSQL, query information_schema directly since JDBCUtilities has issues with case sensitivity
+        ResultSet rsCheck = stmt.executeQuery("""
+            SELECT a.attnum
+            FROM pg_index i
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+            WHERE i.indrelid = '${table}'::regclass
+            AND i.indisprimary
+            LIMIT 1
+        """)
+        pkIndex = rsCheck.next() ? rsCheck.getInt(1) : 0
+        rsCheck.close()
+    } else {
+        // For H2GIS, use the utility method
+        pkIndex = JDBCUtilities.getIntegerPrimaryKey(connection, TableLocation.parse(table_for_utils))
+    }
 
     // get the index of the column given by the user (if exists > 0)
     ResultSet rs = stmt.executeQuery("SELECT * FROM " + table)
     int pkUserIndex = JDBCUtilities.getFieldIndex(rs.getMetaData(), pkName)
 
+    // Normalize table name for output message (consistent with old behavior)
+    String tableForMessage = DatabaseHelper.normalizeTableName(connection, table)
+    
     if (pkIndex > 0) {
-        resultString = String.format("Warning : Source table %s did already contain a primary key. The constraint has been removed. </br>", table)
-        logger.warn(String.format("Warning : Source table %s did already contain a primary key. The constraint has been removed.", table))
-        stmt.execute("ALTER TABLE " + table + " DROP PRIMARY KEY;")
+        resultString = String.format("Warning : Source table %s did already contain a primary key. The constraint has been removed. </br>", tableForMessage)
+        logger.warn(String.format("Warning : Source table %s did already contain a primary key. The constraint has been removed.", tableForMessage))
+        
+        // Database-specific DROP PRIMARY KEY syntax
+        if (isPostgreSQL) {
+            // For PostgreSQL, find and drop the constraint
+            ResultSet rsConstraint = stmt.executeQuery("SELECT constraint_name FROM information_schema.table_constraints WHERE table_name = LOWER('${table}') AND constraint_type = 'PRIMARY KEY'")
+            if (rsConstraint.next()) {
+                String constraintName = rsConstraint.getString(1)
+                rsConstraint.close()
+                stmt.execute("ALTER TABLE " + table + " DROP CONSTRAINT \"${constraintName}\"")
+            } else {
+                rsConstraint.close()
+            }
+        } else {
+            stmt.execute("ALTER TABLE " + table + " DROP PRIMARY KEY;")
+        }
     }
 
     if (pkUserIndex > 0) {
-        stmt.execute("ALTER TABLE " + table + " ALTER COLUMN " + pkName + " INT NOT NULL;")
+        // Database-specific ALTER COLUMN syntax
+        if (isPostgreSQL) {
+            stmt.execute("ALTER TABLE " + table + " ALTER COLUMN " + pkName + " TYPE INTEGER;")
+            stmt.execute("ALTER TABLE " + table + " ALTER COLUMN " + pkName + " SET NOT NULL;")
+        } else {
+            stmt.execute("ALTER TABLE " + table + " ALTER COLUMN " + pkName + " INT NOT NULL;")
+        }
         stmt.execute("ALTER TABLE " + table + " ADD PRIMARY KEY (" + pkName + ");  ")
-        resultString = resultString + String.format(table + " has a new primary key constraint on " + pkName + ".")
+        resultString = resultString + String.format(tableForMessage + " has a new primary key constraint on " + pkName + ".")
     } else {
-        stmt.execute("ALTER TABLE " + table + " ADD " + pkName + " INT AUTO_INCREMENT PRIMARY KEY;")
-        resultString = resultString + String.format(table + " has a new primary key column which is called " + pkName + ".")
+        // Database-specific syntax for adding auto-increment primary key column
+        if (isPostgreSQL) {
+            stmt.execute("ALTER TABLE " + table + " ADD " + pkName + " SERIAL PRIMARY KEY;")
+        } else {
+            stmt.execute("ALTER TABLE " + table + " ADD " + pkName + " INT AUTO_INCREMENT PRIMARY KEY;")
+        }
+        resultString = resultString + String.format(tableForMessage + " has a new primary key column which is called " + pkName + ".")
     }
 
     // print to command window

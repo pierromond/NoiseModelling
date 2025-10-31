@@ -31,6 +31,8 @@ import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.TableLocation
 import org.h2gis.utilities.dbtypes.DBUtils
+import org.h2gis.utilities.dbtypes.DBTypes
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -87,6 +89,10 @@ outputs = [
 
 def exec(Connection connection, input) {
 
+    // Detect database type
+    DBTypes dbType = DatabaseHelper.getDBType(connection)
+    boolean isPostgreSQL = DatabaseHelper.isPostgreSQL(connection)
+    
     // output string, the information given back to the user
     String resultString = null
 
@@ -134,8 +140,8 @@ def exec(Connection connection, input) {
         tableName = fileName
     }
 
-    // do it case-insensitive
-    tableName = tableName.toUpperCase()
+    // Normalize case according to database type
+    tableName = DatabaseHelper.normalizeTableName(tableName, connection)
 
     // Create a connection statement to interact with the database in SQL
     Statement stmt = connection.createStatement()
@@ -200,20 +206,21 @@ def exec(Connection connection, input) {
     }
 
     // Read Geometry Index and type of the table
-    List<String> spatialFieldNames = GeometryTableUtilities.getGeometryColumnNames(connection, TableLocation.parse(tableName, DBUtils.getDBType(connection)))
+    List<String> spatialFieldNames = GeometryTableUtilities.getGeometryColumnNames(connection, TableLocation.parse(tableName, dbType))
 
     // If the table does not contain a geometry field
     if (spatialFieldNames.isEmpty()) {
         logger.warn("The table " + tableName + " does not contain a geometry field.")
     } else {
-        stmt.execute('CREATE SPATIAL INDEX IF NOT EXISTS ' + tableName + '_INDEX ON ' + tableName + '(the_geom);')
+        // Create spatial index (cross-database compatible)
+        DatabaseHelper.createSpatialIndex(connection, tableName, 'the_geom', "${tableName}_INDEX")
 
         // Get the SRID of the table
-        Integer tableSrid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(tableName))
+        Integer tableSrid = DatabaseHelper.getTableSRID(connection, tableName)
 
         if (tableSrid != 0 && tableSrid != srid && input['inputSRID']) {
-            resultString = "The table already has a different SRID than the one you gave."
-            throw new Exception('ERROR : ' + resultString)
+            logger.warn("The table SRID (${tableSrid}) is different from the requested SRID (${srid}). Using table's SRID.")
+            srid = tableSrid
         }
 
         // Replace default SRID by the srid of the table
@@ -225,7 +232,7 @@ def exec(Connection connection, input) {
         // If the table does not have an associated SRID, add a SRID
         if (tableSrid == 0 && !spatialFieldNames.isEmpty()) {
             connection.createStatement().execute(String.format("SELECT UpdateGeometrySRID('%s', '" + spatialFieldNames.get(0) + "', %d);",
-                    TableLocation.parse(tableName).toString(), srid))
+                    TableLocation.parse(tableName, dbType).toString(), srid))
         }
 
     }
@@ -234,11 +241,16 @@ def exec(Connection connection, input) {
     // If the table has a PK column and doesn't have any Primary Key Constraint, then automatically associate a Primary Key
     ResultSet rs = stmt.executeQuery("SELECT * FROM " + tableName)
     int pkUserIndex = JDBCUtilities.getFieldIndex(rs.getMetaData(), "PK")
-    int pkIndex = JDBCUtilities.getIntegerPrimaryKey(connection, TableLocation.parse(tableName))
+    int pkIndex = DatabaseHelper.getPrimaryKeyIndex(connection, tableName)
 
     if (pkIndex == 0) {
         if (pkUserIndex > 0) {
-            stmt.execute("ALTER TABLE " + tableName + " ALTER COLUMN PK INT NOT NULL;")
+            // Syntax differs between H2GIS and PostGIS
+            if (isPostgreSQL) {
+                stmt.execute("ALTER TABLE " + tableName + " ALTER COLUMN PK SET NOT NULL;")
+            } else {
+                stmt.execute("ALTER TABLE " + tableName + " ALTER COLUMN PK INT NOT NULL;")
+            }
             stmt.execute("ALTER TABLE " + tableName + " ADD PRIMARY KEY (PK);  ")
             resultString = resultString + String.format(tableName + " has a new primary key constraint on PK")
             logger.info(String.format(tableName + " has a new primary key constraint on PK"))

@@ -21,6 +21,7 @@ import groovy.sql.Sql
 import groovy.time.TimeCategory
 import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.JDBCUtilities
+import org.h2gis.utilities.SpatialResultSet
 import org.h2gis.utilities.TableLocation
 import org.h2gis.utilities.Tuple
 import org.h2gis.utilities.dbtypes.DBTypes
@@ -29,6 +30,7 @@ import org.h2gis.utilities.wrapper.ConnectionWrapper
 import org.locationtech.jts.geom.*
 import org.noise_planet.noisemodelling.emission.road.cnossosvar.RoadVehicleCnossosvar
 import org.noise_planet.noisemodelling.emission.road.cnossosvar.RoadVehicleCnossosvarParameters
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 
 import java.sql.Connection
 import java.sql.SQLException
@@ -113,11 +115,11 @@ def exec(Connection connection, Map input) {
         removeGeomsNoEmission = !input['keepNoEmissionGeoms']
     }
 
-
-    // do it case-insensitive
-    vehicles_table_name = vehicles_table_name.toUpperCase()
+    // Normalize for H2GIS utility method calls
+    String vehicles_table_name_for_utils = DatabaseHelper.normalizeTableNameForUtilities(connection, vehicles_table_name)
+    
     // Check if srid are in metric projection.
-    sridSources = GeometryTableUtilities.getSRID(connection, TableLocation.parse(vehicles_table_name))
+    sridSources = GeometryTableUtilities.getSRID(connection, TableLocation.parse(vehicles_table_name_for_utils))
     if (sridSources == 3785 || sridSources == 4326) throw new IllegalArgumentException("Error : Please use a metric projection for "+vehicles_table_name+".")
     if (sridSources == 0) throw new IllegalArgumentException("Error : The table "+vehicles_table_name+" does not have an associated SRID.")
 
@@ -216,11 +218,52 @@ class VehicleEmissionProcessData {
 
         if (tableFormat.equals("SUMO")){
                 // Remplissage des variables avec le contenu du fichier SUMO
-                sql.eachRow('SELECT THE_GEOM, SPEED, ID, TIMESTEP FROM ' + tablename + ';') { row ->
+                // Get connection from sql object
+                def stmt = sql.getConnection().createStatement()
+                // Use SELECT * to let SpatialResultSet auto-detect geometry column
+                SpatialResultSet rs = stmt.executeQuery('SELECT * FROM ' + tablename).unwrap(SpatialResultSet.class)
+                
+                sql.withBatch(100, qry) { ps ->
+                    while (rs.next()) {
+                        // Use getGeometry with lowercase column name for PostgreSQL compatibility
+                        Geometry the_geom = rs.getGeometry("the_geom")
+                        double speed = rs.getDouble("SPEED")
+                        def id_veh = rs.getObject("ID")
+                        int timestep = rs.getInt("TIMESTEP")
 
-                    Geometry the_geom = (Geometry) row[0]
-                    double speed = (double) row[1]
-                    def id_veh = row[2]
+                        // Try to convert id_veh to an Integer if it's a String
+                        if (id_veh instanceof String) {
+                            try {
+                                id_veh = Integer.parseInt(id_veh) // Convert to Integer
+                            } catch (NumberFormatException e) {
+                                // If conversion fails, id_veh remains unchanged (still a String)
+                            }
+                        }
+
+                        // in SUMO, the speed is in m.s-1, we need to convert it in km.h-1
+                        double[] carLevel = getCarsLevel(speed*3.6, id_veh)
+                        
+                        ps.addBatch(timestep as String, the_geom as Geometry,
+                                carLevel[0] as Double, carLevel[1] as Double, carLevel[2] as Double,
+                                carLevel[3] as Double, carLevel[4] as Double, carLevel[5] as Double,
+                                carLevel[6] as Double, carLevel[7] as Double)
+                    }
+                }
+                rs.close()
+                stmt.close()
+        } else if (tableFormat.equals("SYMUVIA")){
+            // Remplissage des variables avec le contenu du fichier SYMUVIA
+            def stmt = connection.createStatement()
+            // Use SELECT * to let SpatialResultSet auto-detect geometry column
+            SpatialResultSet rs = stmt.executeQuery('SELECT * FROM ' + tablename).unwrap(SpatialResultSet.class)
+            
+            sql.withBatch(100, qry) { ps ->
+                while (rs.next()) {
+                    // Use getGeometry with lowercase column name for PostgreSQL compatibility
+                    Geometry the_geom = rs.getGeometry("the_geom")
+                    double speed = rs.getDouble("SPEED")
+                    def id_veh = rs.getObject("ID")
+                    int timestep = rs.getInt("TIMESTEP")
 
                     // Try to convert id_veh to an Integer if it's a String
                     if (id_veh instanceof String) {
@@ -230,49 +273,17 @@ class VehicleEmissionProcessData {
                             // If conversion fails, id_veh remains unchanged (still a String)
                         }
                     }
-
-                    int timestep = (int) row[3]
-                    // in SUMO, the speed is in m.s-1, we need to convert it in km.h-1
-                    double[] carLevel = getCarsLevel(speed*3.6, id_veh)
-                    sql.withBatch(100, qry) { ps ->
-                        ps.addBatch(timestep as String, the_geom as Geometry,
-                                carLevel[0] as Double, carLevel[1] as Double, carLevel[2] as Double,
-                                carLevel[3] as Double, carLevel[4] as Double, carLevel[5] as Double,
-                                carLevel[6] as Double, carLevel[7] as Double)
-                    }
-
-                }
-        } else if (tableFormat.equals("SYMUVIA")){
-            // Remplissage des variables avec le contenu du fichier SUMO
-            sql.eachRow('SELECT THE_GEOM, SPEED, ID, TIMESTEP FROM ' + tablename + ';') { row ->
-
-                Geometry the_geom = (Geometry) row[0]
-                double speed = (double) row[1]
-
-                def id_veh = row[2]
-
-                // Try to convert id_veh to an Integer if it's a String
-                if (id_veh instanceof String) {
-                    try {
-                        id_veh = Integer.parseInt(id_veh) // Convert to Integer
-                    } catch (NumberFormatException e) {
-                        // If conversion fails, id_veh remains unchanged (still a String)
-                    }
-                }
-
-
-                int timestep = (int) row[3]
-
-                // in SYMUVIA, the speed is in km.h-1
-                double[] carLevel = getCarsLevel(speed, id_veh)
-                sql.withBatch(100, qry) { ps ->
+                    // in SYMUVIA, the speed is in km.h-1
+                    double[] carLevel = getCarsLevel(speed, id_veh)
+                    
                     ps.addBatch(timestep as String, the_geom as Geometry,
                             carLevel[0] as Double, carLevel[1] as Double, carLevel[2] as Double,
                             carLevel[3] as Double, carLevel[4] as Double, carLevel[5] as Double,
                             carLevel[6] as Double, carLevel[7] as Double)
                 }
-
             }
+            rs.close()
+            stmt.close()
 
         }  else    {
             System.out.println("Unknown File Format")

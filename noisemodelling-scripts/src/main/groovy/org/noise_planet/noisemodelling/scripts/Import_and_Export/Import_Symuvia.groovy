@@ -13,6 +13,7 @@ import org.h2gis.utilities.TableLocation
 import org.h2gis.utilities.TableUtilities
 import org.h2gis.utilities.dbtypes.DBTypes
 import org.h2gis.utilities.dbtypes.DBUtils
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.xml.sax.InputSource
@@ -118,9 +119,10 @@ def exec(Connection connection, input) {
         tableName = fileName
     }
 
-    // do it case-insensitive
-    tableName = tableName.toUpperCase()
-    tableNameTraj = tableName + "_TRAJ"
+    // Normalize table names for output tables we create
+    tableName = DatabaseHelper.normalizeTableName(connection, tableName)
+    tableNameTraj = DatabaseHelper.normalizeTableName(connection, tableName + "_TRAJ")
+    
     // Create a connection statement to interact with the database in SQL
     Statement stmt = connection.createStatement()
 
@@ -139,8 +141,8 @@ def exec(Connection connection, input) {
     }
 
     stmt.execute("CREATE TABLE " + tableNameTraj + " AS SELECT id ID_VEH, ST_Point(abs, ord) THE_GEOM, type TYPE,vit SPEED, acc ACC,inst TIME FROM " +tableNameTraj + "_xml;")
-    stmt.execute("DROP TABLE " +tableNameTraj + "_xml IF EXISTS;")
-    stmt.execute("DROP TABLE " +tableName + "_INST IF EXISTS;")
+    stmt.execute("DROP TABLE IF EXISTS " +tableNameTraj + "_xml;")
+    stmt.execute("DROP TABLE IF EXISTS " +tableName + "_INST;")
 
 
     // Read Geometry Index and type of the table
@@ -150,7 +152,8 @@ def exec(Connection connection, input) {
     if (spatialFieldNames.isEmpty()) {
         logger.warn("The table " + tableNameTraj + " does not contain a geometry field.")
     } else {
-        stmt.execute('CREATE SPATIAL INDEX IF NOT EXISTS ' + tableNameTraj + '_INDEX ON ' + tableNameTraj + '(the_geom);')
+        // Create spatial index (cross-database compatible)
+        DatabaseHelper.createSpatialIndex(connection, tableNameTraj, 'the_geom', tableNameTraj + '_INDEX')
 
         // Get the SRID of the table
         Integer tableSrid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(tableNameTraj))
@@ -168,15 +171,17 @@ def exec(Connection connection, input) {
 
         // If the table does not have an associated SRID, add a SRID
         if (tableSrid == 0 && !spatialFieldNames.isEmpty()) {
+            // For PostGIS, table name must be lowercase
+            String tableForUpdate = DatabaseHelper.isPostgreSQL(connection) ? tableNameTraj.toLowerCase() : tableNameTraj
             connection.createStatement().execute(String.format("SELECT UpdateGeometrySRID('%s', '" + spatialFieldNames.get(0) + "', %d);",
-                    TableLocation.parse(tableNameTraj).toString(), srid))
+                    tableForUpdate, srid))
         }
 
     }
 
 
     // get the index of the primary key column (if exists > 0)
-    int pkIndex = JDBCUtilities.getIntegerPrimaryKey(connection, TableLocation.parse(tableNameTraj))
+    int pkIndex = DatabaseHelper.getPrimaryKeyIndex(connection, tableNameTraj)
 
     // get the index of the column given by the user (if exists > 0)
     ResultSet rs = stmt.executeQuery("SELECT * FROM " + tableNameTraj)
@@ -185,14 +190,33 @@ def exec(Connection connection, input) {
     if (pkIndex > 0) {
         resultString = String.format("Warning : Source table %s did already contain a primary key. The constraint has been removed. </br>", table)
         logger.warn(String.format("Warning : Source table %s did already contain a primary key. The constraint has been removed.", table))
-        stmt.execute("ALTER TABLE " + tableNameTraj + " DROP PRIMARY KEY;")
+        if (DatabaseHelper.isPostgreSQL(connection)) {
+            // PostGIS: need to find the constraint name first
+            def pkName = connection.createStatement().executeQuery(
+                "SELECT conname FROM pg_constraint WHERE contype = 'p' AND conrelid = '${tableNameTraj.toLowerCase()}'::regclass"
+            )
+            if (pkName.next()) {
+                stmt.execute("ALTER TABLE " + tableNameTraj + " DROP CONSTRAINT ${pkName.getString(1)};")
+            }
+            pkName.close()
+        } else {
+            stmt.execute("ALTER TABLE " + tableNameTraj + " DROP PRIMARY KEY;")
+        }
     }
 
     if (pkUserIndex > 0) {
-        stmt.execute("ALTER TABLE " + tableNameTraj + " ALTER COLUMN PK INT NOT NULL;")
+        if (DatabaseHelper.isPostgreSQL(connection)) {
+            stmt.execute("ALTER TABLE " + tableNameTraj + " ALTER COLUMN PK SET NOT NULL;")
+        } else {
+            stmt.execute("ALTER TABLE " + tableNameTraj + " ALTER COLUMN PK INT NOT NULL;")
+        }
         stmt.execute("ALTER TABLE " + tableNameTraj + " ADD PRIMARY KEY (PK);  ")
     } else {
-        stmt.execute("ALTER TABLE " + tableNameTraj + " ADD PK INT AUTO_INCREMENT PRIMARY KEY;")
+        if (DatabaseHelper.isPostgreSQL(connection)) {
+            stmt.execute("ALTER TABLE " + tableNameTraj + " ADD COLUMN PK SERIAL PRIMARY KEY;")
+        } else {
+            stmt.execute("ALTER TABLE " + tableNameTraj + " ADD PK INT AUTO_INCREMENT PRIMARY KEY;")
+        }
     }
 
     resultString = "The table " + tableNameTraj + " has been uploaded to database!"

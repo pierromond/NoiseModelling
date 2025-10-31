@@ -24,6 +24,7 @@ import org.h2gis.functions.spatial.crs.ST_SetSRID
 import org.h2gis.functions.spatial.crs.ST_Transform
 import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.TableLocation
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.locationtech.jts.geom.Envelope
 import org.locationtech.jts.geom.Geometry
 import org.locationtech.jts.io.WKTReader
@@ -133,18 +134,20 @@ def exec(Connection connection, input) {
     if (input['sourcesTableName']) {
         sources_table_name = input['sourcesTableName']
     }
-    sources_table_name = sources_table_name.toUpperCase()
 
 
     String building_table_name = input['buildingTableName']
-    building_table_name = building_table_name.toUpperCase()
+    
+    // Get database-specific column names
+    String geomColumn = DatabaseHelper.getGeometryColumnName(connection)
+    String heightColumn = DatabaseHelper.normalizeColumnName(connection, "HEIGHT")
 
     Sql sql = new Sql(connection)
 
-    // Reproject fence
-    int targetSrid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(building_table_name))
+    // Reproject fence - use DatabaseHelper for PostgreSQL compatibility
+    int targetSrid = DatabaseHelper.getTableSRID(connection, building_table_name, geomColumn)
     if (targetSrid == 0 && input['sourcesTableName']) {
-        targetSrid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(sources_table_name))
+        targetSrid = DatabaseHelper.getTableSRID(connection, sources_table_name, geomColumn)
     }
 
     Geometry fenceGeom = null
@@ -158,7 +161,8 @@ def exec(Connection connection, input) {
             throw new Exception("Unable to find buildings or sources SRID, ignore fence parameters")
         }
     } else if (input['fenceTableName']) {
-        fenceGeom = GeometryTableUtilities.getEnvelope(connection, TableLocation.parse(input['fenceTableName'] as String), "THE_GEOM")
+        String fenceTableName = input['fenceTableName'] as String
+        fenceGeom = DatabaseHelper.getTableEnvelope(connection, fenceTableName, geomColumn)
     }
 
 
@@ -169,38 +173,54 @@ def exec(Connection connection, input) {
 
     Envelope envelope
     if (fenceGeom == null) {
-        envelope = GeometryTableUtilities.getEnvelope(connection, TableLocation.parse(sources_table_name), "THE_GEOM").getEnvelopeInternal();
-        envelope.expandToInclude(GeometryTableUtilities.getEnvelope(connection, TableLocation.parse(building_table_name), "THE_GEOM").getEnvelopeInternal())
+        envelope = DatabaseHelper.getTableEnvelope(connection, sources_table_name, geomColumn).getEnvelopeInternal();
+        envelope.expandToInclude(DatabaseHelper.getTableEnvelope(connection, building_table_name, geomColumn).getEnvelopeInternal())
     } else {
         envelope = fenceGeom.envelopeInternal
     }
 
+    // Cross-database compatible range function and random function
+    String rangeFunction = DatabaseHelper.isPostgreSQL(connection) ? "generate_series(0," + nReceivers.toString() + ")" : "system_range(0," + nReceivers.toString() + ")"
+    String randomFunction = DatabaseHelper.isPostgreSQL(connection) ? "RANDOM()" : "RAND()"
 
-    sql.execute("create table " + receivers_table_name + " as select ST_SetSRID(ST_MAKEPOINT(RAND()*(" + envelope.maxX + " - " + envelope.minX.toString() + ") + " + envelope.minX.toString() + ", RAND()*(" + envelope.maxY.toString() + " - " + envelope.minY.toString() + ") + " + envelope.minY.toString() + ", " + h + "), " + targetSrid.toInteger() + ") as the_geom from system_range(0," + nReceivers.toString() + ");")
+    sql.execute("create table " + receivers_table_name + " as select ST_SetSRID(ST_MAKEPOINT(" + randomFunction + "*(" + envelope.maxX + " - " + envelope.minX.toString() + ") + " + envelope.minX.toString() + ", " + randomFunction + "*(" + envelope.maxY.toString() + " - " + envelope.minY.toString() + ") + " + envelope.minY.toString() + ", " + h + "), " + targetSrid.toInteger() + ") as " + geomColumn + " from " + rangeFunction + ";")
 
 
     if (input['fence']) {
         // Delete points outside geom but inside
-        sql.execute("DELETE FROM " + receivers_table_name + " WHERE NOT ST_Intersects(THE_GEOM, :geom)", ['geom': fenceGeom])
+        // PostgreSQL requires WKT for geometry parameters
+        if (DatabaseHelper.isPostgreSQL(connection)) {
+            sql.execute("DELETE FROM " + receivers_table_name + " WHERE NOT ST_Intersects(" + geomColumn + ", ST_GeomFromText(?, ?))", 
+                       [fenceGeom.toString(), fenceGeom.getSRID()])
+        } else {
+            sql.execute("DELETE FROM " + receivers_table_name + " WHERE NOT ST_Intersects(" + geomColumn + ", :geom)", 
+                       ['geom': fenceGeom])
+        }
     }
 
     logger.info("Create spatial index on " + receivers_table_name)
-    sql.execute("Create spatial index on " + receivers_table_name + "(the_geom);")
+    // Create spatial index (cross-database compatible)
+    DatabaseHelper.createSpatialIndex(connection, receivers_table_name, geomColumn)
 
     logger.info('Delete receivers where buildings...')
     if (input['buildingTableName']) {
         //Delete receivers inside buildings .
-        sql.execute("delete from " + receivers_table_name + " g where exists (select 1 from " + building_table_name + " b where g.the_geom && b.the_geom and ST_distance(b.the_geom, g.the_geom) < 1 and b.height >= " + h + " limit 1);")
+        sql.execute("delete from " + receivers_table_name + " g where exists (select 1 from " + building_table_name + " b where g." + geomColumn + " && b." + geomColumn + " and ST_distance(b." + geomColumn + ", g." + geomColumn + ") < 1 and b." + heightColumn + " >= " + h + " limit 1);")
     }
 
     logger.info('Delete receivers where sound sources...')
     if (input['sourcesTableName']) {
         //Delete receivers near sources
-        sql.execute("delete from " + receivers_table_name + " g where exists (select 1 from " + sources_table_name + " r where st_expand(g.the_geom, 1) && r.the_geom and st_distance(g.the_geom, r.the_geom) < 1 limit 1);")
+        sql.execute("delete from " + receivers_table_name + " g where exists (select 1 from " + sources_table_name + " r where st_expand(g." + geomColumn + ", 1) && r." + geomColumn + " and st_distance(g." + geomColumn + ", r." + geomColumn + ") < 1 limit 1);")
     }
 
     logger.info('Add Primary Key column...')
-    sql.execute("ALTER TABLE " + receivers_table_name + " ADD pk INT AUTO_INCREMENT PRIMARY KEY;")
+    // Cross-database compatible AUTO_INCREMENT
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        sql.execute("ALTER TABLE " + receivers_table_name + " ADD pk SERIAL PRIMARY KEY;")
+    } else {
+        sql.execute("ALTER TABLE " + receivers_table_name + " ADD pk INT AUTO_INCREMENT PRIMARY KEY;")
+    }
 
     // Process Done
     resultString = "Process done. Table of receivers " + receivers_table_name + " created !"
@@ -211,6 +231,10 @@ def exec(Connection connection, input) {
 
 
     // print to WPS Builder
+    // Ensure SRID is properly set for PostgreSQL (fixes PostGIS metadata)
+    // Pass the explicit SRID since receiver generation may create geometries with SRID=0
+    DatabaseHelper.ensureSRID(connection, receivers_table_name, 'the_geom', targetSrid)
+
     return resultString
 
 }

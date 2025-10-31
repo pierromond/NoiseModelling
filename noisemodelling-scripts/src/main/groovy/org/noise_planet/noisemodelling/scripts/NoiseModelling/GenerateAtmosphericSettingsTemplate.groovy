@@ -14,10 +14,12 @@ package org.noise_planet.noisemodelling.scripts.NoiseModelling
 
 import groovy.sql.Sql
 import org.h2gis.utilities.JDBCUtilities
+import org.h2gis.utilities.TableLocation
 import org.h2gis.utilities.dbtypes.DBTypes
 import org.h2gis.utilities.dbtypes.DBUtils
 import org.h2gis.utilities.wrapper.ConnectionWrapper
 import org.noise_planet.noisemodelling.propagation.AttenuationParameters
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.sql.Connection
@@ -78,16 +80,34 @@ def exec(Connection connection, Map input) {
     Logger logger = LoggerFactory.getLogger("org.noise_planet.noisemodelling")
 
     String tableSourcesEmission = input.get("tableSourcesEmission") as String
+    
+    // Normalize table names for database compatibility
+    tableSourcesEmission = DatabaseHelper.normalizeTableName(tableSourcesEmission, connection)
 
     def tablePeriodAtmosphericSettings = "SOURCES_ATMOSPHERIC"
 
     if(input.containsKey("tablePeriodAtmosphericSettings")) {
         tablePeriodAtmosphericSettings = input.get("tablePeriodAtmosphericSettings") as String
     }
+    
+    tablePeriodAtmosphericSettings = DatabaseHelper.normalizeTableName(tablePeriodAtmosphericSettings, connection)
 
-    List<String> periods = JDBCUtilities.getUniqueFieldValues(connection, tableSourcesEmission, "PERIOD")
+                // Get unique PERIOD values, handling PostGIS casing and quoting differences
+                String periodColumn = DatabaseHelper.isPostgreSQL(connection) ? "period" : "PERIOD"
+        TableLocation sourcesLocation = TableLocation.parse(tableSourcesEmission, dbType)
+        String tableIdentifier = sourcesLocation.toString()
+        List<String> periods
 
-    AttenuationParameters defaultParameters = new AttenuationParameters()
+        if (DatabaseHelper.isPostgreSQL(connection)) {
+                String query = "SELECT DISTINCT ${periodColumn} AS period_value FROM ${tableIdentifier}"
+                periods = sql.rows(query).collect { row -> row.period_value?.toString() }
+        } else {
+                periods = JDBCUtilities.getUniqueFieldValues(connection, tableSourcesEmission, periodColumn)
+        }
+
+                periods = periods.findAll { it != null }
+
+                AttenuationParameters defaultParameters = new AttenuationParameters()
 
     periods.each { String period ->
         defaultParameters.writeToDatabase(connection, tablePeriodAtmosphericSettings, period)

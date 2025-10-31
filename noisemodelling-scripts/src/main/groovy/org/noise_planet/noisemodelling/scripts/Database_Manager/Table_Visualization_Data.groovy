@@ -20,10 +20,10 @@ package org.noise_planet.noisemodelling.scripts.Database_Manager
 
 import groovy.sql.Sql
 import org.h2gis.utilities.JDBCUtilities
-import org.h2gis.utilities.GeometryTableUtilities
-import org.h2gis.utilities.TableLocation
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.locationtech.jts.geom.Geometry
 import org.locationtech.jts.io.WKTWriter
+import org.locationtech.jts.io.WKBReader
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -77,10 +77,8 @@ def exec(Connection connection, input) {
         linesNumber = input['linesNumber'] as Integer
     }
 
-    // Get name of the table
+    // Get name of the table (use as-is - databases handle case naturally)
     String tableName = input["tableName"] as String
-    // do it case-insensitive
-    tableName = tableName.toUpperCase()
 
     // Create a connection statement to interact with the database in SQL
     Sql sql = new Sql(connection)
@@ -110,7 +108,8 @@ static String mapToTable(List<Map> list, Sql sql, String tableName, Connection c
     output.append("The total number of rows is " + sql.firstRow('SELECT COUNT(*) FROM ' + tableName)[0])
 
     //get SRID of the table
-    int srid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(tableName))
+    String normalizedTableName = DatabaseHelper.normalizeTableName(connection, tableName)
+    int srid = DatabaseHelper.getTableSRID(connection, normalizedTableName)
 
     if (srid > 0) {
         output.append("</br>")
@@ -120,8 +119,8 @@ static String mapToTable(List<Map> list, Sql sql, String tableName, Connection c
         output.append("This table doesn't have any srid")
     }
 
-    //get SRID of the table
-    int pkIndex = JDBCUtilities.getIntegerPrimaryKey(connection, TableLocation.parse(tableName))
+    //get primary key index of the table
+    int pkIndex = DatabaseHelper.getPrimaryKeyIndex(connection, tableName)
 
     if (pkIndex > 0) {
         output.append("</br>")
@@ -141,19 +140,33 @@ static String mapToTable(List<Map> list, Sql sql, String tableName, Connection c
 
     output.append("</tr></thead><tbody>")
     WKTWriter wktWriter = new WKTWriter(3)
+    WKBReader wkbReader = new WKBReader()
+    boolean isPostgreSQL = DatabaseHelper.isPostgreSQL(connection)
+
     list.each { map ->
-        if (map.size() > 0) {
-
+        if (!map.isEmpty()) {
             def values = map.values()
-
             output.append("<tr>")
 
-            values.each {
-                def val = it
-                if (it instanceof Geometry) {
-                    val = wktWriter.write(it)
+            values.each { value ->
+                def cellValue = value
+                if (cellValue instanceof Geometry) {
+                    cellValue = wktWriter.write(cellValue)
+                } else if (isPostgreSQL && value instanceof org.postgresql.util.PGobject) {
+                    org.postgresql.util.PGobject pgObject = (org.postgresql.util.PGobject) value
+                    String pgValue = pgObject.value
+                    if (pgValue) {
+                        try {
+                            Geometry geom = wkbReader.read(hexStringToByteArray(pgValue))
+                            cellValue = wktWriter.write(geom)
+                        } catch (Exception ignore) {
+                            cellValue = pgValue
+                        }
+                    } else {
+                        cellValue = pgValue
+                    }
                 }
-                output.append "<td><div style='width: 150px;'>${val}</div></td>"
+                output.append "<td><div style='width: 150px;'>${cellValue}</div></td>"
             }
 
             output.append("</tr>")
@@ -161,5 +174,16 @@ static String mapToTable(List<Map> list, Sql sql, String tableName, Connection c
     }
     output.append("</tbody></table>")
 
-    output.toString()
+    return output.toString()
+}
+
+static byte[] hexStringToByteArray(String hex) {
+    int len = hex.length()
+    byte[] data = new byte[len / 2]
+    for (int i = 0; i < len; i += 2) {
+        int high = Character.digit(hex.charAt(i), 16)
+        int low = Character.digit(hex.charAt(i + 1), 16)
+        data[i / 2] = (byte) ((high << 4) + low)
+    }
+    return data
 }

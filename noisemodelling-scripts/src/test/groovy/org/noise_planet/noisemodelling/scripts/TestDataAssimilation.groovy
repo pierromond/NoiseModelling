@@ -29,23 +29,28 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
 import java.sql.Connection
+import java.util.UUID
 
 
 
-class TestDataAssimilation{
-    private Connection connection;
+class TestDataAssimilation {
+    private Connection connection
 
     @BeforeEach
-    void tearUp(TestInfo testInfo) throws Exception {
-        connection = JDBCUtilities.wrapConnection(H2GISDBFactory.createSpatialDataBase(testInfo.getDisplayName(), true, ""));
+    void beforeEach(TestInfo testInfo) throws Exception {
+        String testName = testInfo?.getDisplayName() ?: "test"
+        String dbName = "testdb_" + testName.replaceAll("[^A-Za-z0-9]", "_") + "_" + UUID.randomUUID().toString().substring(0, 8)
+        connection = H2GISDBFactory.createSpatialDataBase(dbName, true)
     }
 
     @AfterEach
     void tearDown() throws Exception {
-        if (connection != null) {
-            connection.close();
+        if (connection != null && !connection.isClosed()) {
+            connection.close()
         }
+        connection = null
     }
+
     Logger logger = LoggerFactory.getLogger(TestDataAssimilation.class)
 
     @Test

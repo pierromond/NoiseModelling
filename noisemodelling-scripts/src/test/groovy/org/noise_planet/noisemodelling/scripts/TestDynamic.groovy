@@ -23,25 +23,31 @@ import org.noise_planet.noisemodelling.scripts.Import_and_Export.Import_File
 import org.noise_planet.noisemodelling.scripts.Import_and_Export.Import_OSM
 import org.noise_planet.noisemodelling.scripts.NoiseModelling.Noise_level_from_source
 import org.noise_planet.noisemodelling.scripts.Receivers.Regular_Grid
+import org.noise_planet.noisemodelling.scripts.TestSupport.DatabaseTestHelper
 
 import java.sql.Connection
+import java.util.UUID
 
 
 
-class TestDynamic{
-    private Connection connection;
+class TestDynamic {
+    private Connection connection
 
     @BeforeEach
-    void tearUp(TestInfo testInfo) throws Exception {
-        connection = JDBCUtilities.wrapConnection(H2GISDBFactory.createSpatialDataBase(testInfo.getDisplayName(), true, ""));
+    void beforeEach(TestInfo testInfo) throws Exception {
+        String testName = testInfo?.getDisplayName() ?: "test"
+        String dbName = "testdb_" + testName.replaceAll("[^A-Za-z0-9]", "_") + "_" + UUID.randomUUID().toString().substring(0, 8)
+        connection = H2GISDBFactory.createSpatialDataBase(dbName, true)
     }
 
     @AfterEach
     void tearDown() throws Exception {
-        if (connection != null) {
-            connection.close();
+        if (connection != null && !connection.isClosed()) {
+            connection.close()
         }
+        connection = null
     }
+
     /**
      * as SUMO or SYMUVIA or Drone input
      */

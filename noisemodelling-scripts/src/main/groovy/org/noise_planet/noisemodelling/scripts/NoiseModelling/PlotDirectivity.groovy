@@ -100,9 +100,8 @@ def exec(Connection connection, input) {
 
     Map<Integer,DiscreteDirectivitySphere> directivityData;
     if (input['tableSourceDirectivity']) {
+        // Use as-is from user - databases handle case naturally
         String tableSourceDirectivity = input['tableSourceDirectivity']
-        // do it case-insensitive
-        tableSourceDirectivity = tableSourceDirectivity.toUpperCase()
         directivityData = NoiseMapLoader.fetchDirectivity(connection, tableSourceDirectivity, 1)
     } else {
         directivityData = new HashMap<>();

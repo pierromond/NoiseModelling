@@ -19,11 +19,13 @@ import groovy.sql.GroovyRowResult
 import groovy.transform.CompileStatic
 import org.h2gis.utilities.wrapper.ConnectionWrapper
 import org.locationtech.jts.geom.Geometry
+import org.locationtech.jts.io.WKBReader
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
 import java.sql.*
 import groovy.sql.Sql
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 
 title = 'Chose Closest Receivers For Matsim Activities'
 description = 'Chose the closest receiver in a RECEIVERS table for every Mastim Activity in an ACTIVITIES table'
@@ -99,7 +101,8 @@ static def exec(Connection connection, input) {
     }
     if (!geomIndexFound) {
         logger.info("THE_GEOM index missing from receivers table, creating one ...")
-        sql.execute("CREATE SPATIAL INDEX ON " + receiversTable + " (THE_GEOM)");
+        // Create spatial index (cross-database compatible)
+        DatabaseHelper.createSpatialIndex(connection, receiversTable, 'THE_GEOM', receiversTable + '_GEOM_INDEX')
     }
 
     geomIndexFound = false;
@@ -112,20 +115,24 @@ static def exec(Connection connection, input) {
     }
     if (!geomIndexFound) {
         logger.info("THE_GEOM index missing from activities table, creating one ...")
-        sql.execute("CREATE SPATIAL INDEX ON " + activitiesTable + " (THE_GEOM)");
+        // Create spatial index (cross-database compatible)
+        DatabaseHelper.createSpatialIndex(connection, activitiesTable, 'THE_GEOM', activitiesTable + '_GEOM_INDEX')
     }
 
     logger.info("Checking indexes done, running script ...")
 
+    // Cross-database compatible AUTO_INCREMENT/SERIAL
+    String pkType = DatabaseHelper.isPostgreSQL(connection) ? "SERIAL PRIMARY KEY" : "integer PRIMARY KEY AUTO_INCREMENT"
+
     sql.execute(String.format("DROP TABLE IF EXISTS %s", outTableName))
 
-    String create_query = "CREATE TABLE " + outTableName + '''( 
-        PK integer PRIMARY KEY AUTO_INCREMENT,
-        FACILITY varchar(255),
-        THE_GEOM geometry,
-        ORIGIN_GEOM geometry,
-        TYPES varchar(255)
-    )'''
+    String create_query = "CREATE TABLE " + outTableName + " ( " +
+        "PK " + pkType + ", " +
+        "FACILITY varchar(255), " +
+        "THE_GEOM geometry, " +
+        "ORIGIN_GEOM geometry, " +
+        "TYPES varchar(255) " +
+    ")"
     sql.execute(create_query)
 
     PreparedStatement insert_stmt = connection.prepareStatement(
@@ -136,8 +143,21 @@ static def exec(Connection connection, input) {
     long count = 0, do_print = 1
     int srid = 0
     long start = System.currentTimeMillis();
+    
+    // Initialize WKBReader for PostgreSQL geometry conversion
+    WKBReader wkbReader = DatabaseHelper.isPostgreSQL(connection) ? new WKBReader() : null
+    
     for (GroovyRowResult activity: activities_res) {
-        Geometry activityGeom = activity["ORIGIN_GEOM"] as Geometry;
+        // Cross-database geometry reading
+        Geometry activityGeom
+        if (DatabaseHelper.isPostgreSQL(connection)) {
+            def pgGeom = activity["ORIGIN_GEOM"]
+            byte[] wkb = org.postgresql.util.PGobject.class.cast(pgGeom).getValue().decodeHex()
+            activityGeom = wkbReader.read(wkb)
+        } else {
+            activityGeom = activity["ORIGIN_GEOM"] as Geometry
+        }
+        
         String facility = activity["FACILITY"] as String;
         String types = activity["TYPES"] as String;
         srid = activity["SRID"] as Integer
@@ -147,7 +167,21 @@ static def exec(Connection connection, input) {
             WHERE ST_EXPAND(ST_GeomFromText('%s', %s), %s, %s) && R.THE_GEOM
             ORDER BY ST_Distance(ST_GeomFromText('%s', %s), R.THE_GEOM) ASC LIMIT 1
         ''', receiversTable, activityGeom.toText(), srid, dist, dist, activityGeom.toText(), srid));
-        Geometry receiverGeom = (receiver_res.size() == 0) ? activityGeom : (receiver_res.get(0)["THE_GEOM"] as Geometry);
+        
+        // Cross-database geometry reading for receiver
+        Geometry receiverGeom
+        if (receiver_res.size() == 0) {
+            receiverGeom = activityGeom
+        } else {
+            if (DatabaseHelper.isPostgreSQL(connection)) {
+                def pgGeom = receiver_res.get(0)["THE_GEOM"]
+                byte[] wkb = org.postgresql.util.PGobject.class.cast(pgGeom).getValue().decodeHex()
+                receiverGeom = wkbReader.read(wkb)
+            } else {
+                receiverGeom = receiver_res.get(0)["THE_GEOM"] as Geometry
+            }
+        }
+        
         insert_stmt.setString(1, facility)
         insert_stmt.setString(2, receiverGeom.toText())
         insert_stmt.setInt(3, srid)
@@ -168,9 +202,15 @@ static def exec(Connection connection, input) {
     logger.info("Creating index on " + outTableName + "(FACILITY)");
     sql.execute("CREATE INDEX ON " + outTableName + "(FACILITY)");
     logger.info("Creating spatial index on " + outTableName + "(THE_GEOM)");
-    sql.execute("CREATE SPATIAL INDEX ON " + outTableName + "(THE_GEOM)");
+    // Create spatial index (cross-database compatible)
+    DatabaseHelper.createSpatialIndex(connection, outTableName, 'THE_GEOM', outTableName + '_GEOM_INDEX')
 
-    sql.execute("UPDATE " + outTableName + " SET THE_GEOM = ST_UpdateZ(THE_GEOM, 4.0), ORIGIN_GEOM  = ST_UpdateZ(ORIGIN_GEOM, 4.0)")
+    // Cross-database Z-value update
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        sql.execute("UPDATE " + outTableName + " SET THE_GEOM = ST_Translate(ST_Force3D(THE_GEOM), 0, 0, 4.0), ORIGIN_GEOM = ST_Translate(ST_Force3D(ORIGIN_GEOM), 0, 0, 4.0)")
+    } else {
+        sql.execute("UPDATE " + outTableName + " SET THE_GEOM = ST_UpdateZ(THE_GEOM, 4.0), ORIGIN_GEOM  = ST_UpdateZ(ORIGIN_GEOM, 4.0)")
+    }
     
     logger.info('End : Receivers_From_Activities_Closest')
     resultString = "Process done. Table of receivers " + outTableName + " created !"

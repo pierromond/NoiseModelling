@@ -29,6 +29,7 @@ import org.slf4j.LoggerFactory
 
 import java.sql.*
 import groovy.sql.Sql
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 
 title = 'Import Matsim "facilities" file'
 description = 'Import Matsim "facilities" file containing agents activities location.'
@@ -95,16 +96,20 @@ static def exec(Connection connection, input) {
 
     double height = 4.0;
 
+    // Cross-database compatible AUTO_INCREMENT/SERIAL
+    String pkType = DatabaseHelper.isPostgreSQL(connection) ? "SERIAL PRIMARY KEY" : "integer PRIMARY KEY AUTO_INCREMENT"
+
     //Delete previous receivers
     sql.execute(String.format("DROP TABLE IF EXISTS %s", outTableName))
-    sql.execute("CREATE TABLE " + outTableName + '''( 
-        PK integer PRIMARY KEY AUTO_INCREMENT,
-        FACILITY varchar(255),
-        THE_GEOM geometry,
-        TYPES varchar(255)
-    );''')
+    sql.execute("CREATE TABLE " + outTableName + " ( " +
+        "PK " + pkType + ", " +
+        "FACILITY varchar(255), " +
+        "THE_GEOM geometry, " +
+        "TYPES varchar(255) " +
+    ");")
     sql.execute("CREATE INDEX ON " + outTableName + "(FACILITY)");
-    sql.execute("CREATE SPATIAL INDEX ON " + outTableName + "(THE_GEOM)");
+    // Create spatial index (cross-database compatible)
+    DatabaseHelper.createSpatialIndex(connection, outTableName, 'THE_GEOM', outTableName + '_GEOM_INDEX')
 
     Scenario scenario = ScenarioUtils.loadScenario(ConfigUtils.createConfig())
     MatsimFacilitiesReader facilitiesReader = new MatsimFacilitiesReader(scenario)

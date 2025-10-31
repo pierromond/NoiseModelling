@@ -39,8 +39,9 @@ import org.openstreetmap.osmosis.xml.v0_6.XmlReader;
 import org.openstreetmap.osmosis.xml.common.CompressionMethod;
 
 import crosby.binary.osmosis.OsmosisReader
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
-import org.slf4j.LoggerFactory;
+import org.slf4j.LoggerFactory
 
 import java.sql.Connection
 
@@ -134,32 +135,78 @@ def exec(Connection connection, input) {
         sql.execute("INSERT INTO " + tableName + " VALUES (" + building.id + ", ST_MakeValid(ST_SIMPLIFYPRESERVETOPOLOGY(ST_Transform(ST_GeomFromText('" + building.geom + "', 4326), "+srid+"),0.1)), " + building.height + ")")
     }
 
-    sql.execute('''
-        CREATE SPATIAL INDEX IF NOT EXISTS BUILDINGS_INDEX ON ''' + tableName + '''(the_geom);
-        -- List buildings that intersects with other buildings that have a greater area
-        DROP TABLE IF EXISTS tmp_relation_buildings_buildings;
-        CREATE TABLE tmp_relation_buildings_buildings AS SELECT s1.ID_WAY as PK_BUILDING, S2.ID_WAY as PK2_BUILDING FROM MAP_BUILDINGS_GEOM S1, MAP_BUILDINGS_GEOM S2 WHERE ST_AREA(S1.THE_GEOM) < ST_AREA(S2.THE_GEOM) AND S1.THE_GEOM && S2.THE_GEOM AND ST_DISTANCE(S1.THE_GEOM, S2.THE_GEOM) <= 0.1;
-        
-        -- Alter that small area buildings by removing shared area
-        DROP TABLE IF EXISTS tmp_buildings_truncated;
-        CREATE TABLE tmp_buildings_truncated AS SELECT PK_BUILDING, ST_DIFFERENCE(s1.the_geom, ST_BUFFER(ST_Collect(s2.the_geom), 0.1, 'join=mitre')) the_geom, s1.HEIGHT HEIGHT from tmp_relation_buildings_buildings r, MAP_BUILDINGS_GEOM s1, MAP_BUILDINGS_GEOM s2 WHERE PK_BUILDING = S1.ID_WAY AND PK2_BUILDING = S2.ID_WAY  GROUP BY PK_BUILDING;
-        
-        -- Merge original buildings with altered buildings 
-        DROP TABLE IF EXISTS BUILDINGS;
-        CREATE TABLE BUILDINGS(PK INTEGER PRIMARY KEY, THE_GEOM GEOMETRY, HEIGHT real) AS SELECT s.id_way, ST_SETSRID(s.the_geom, '''+srid+'''), s.HEIGHT from  MAP_BUILDINGS_GEOM s where id_way not in (select PK_BUILDING from tmp_buildings_truncated) UNION ALL select PK_BUILDING, ST_SETSRID(the_geom, '''+srid+'''), HEIGHT from tmp_buildings_truncated WHERE NOT st_isempty(the_geom);
+    // Create spatial index (cross-database compatible)
+    DatabaseHelper.createSpatialIndex(connection, tableName, 'the_geom', 'BUILDINGS_INDEX')
 
-        DROP TABLE IF EXISTS tmp_buildings_truncated;
-        DROP TABLE IF EXISTS tmp_relation_buildings_buildings;
-        DROP TABLE IF EXISTS MAP_BUILDINGS_GEOM;
-    ''');
+    // Identify overlapping buildings (use explicit JOIN for PostgreSQL compatibility)
+    sql.execute("DROP TABLE IF EXISTS tmp_relation_buildings_buildings")
+    String relationSql = "CREATE TABLE tmp_relation_buildings_buildings AS " +
+      "SELECT s1.ID_WAY AS PK_BUILDING, s2.ID_WAY AS PK2_BUILDING " +
+      "FROM MAP_BUILDINGS_GEOM s1 " +
+      "JOIN MAP_BUILDINGS_GEOM s2 ON s1.ID_WAY <> s2.ID_WAY " +
+      "WHERE ST_AREA(s1.THE_GEOM) < ST_AREA(s2.THE_GEOM) " +
+      "AND s1.THE_GEOM && s2.THE_GEOM " +
+      "AND ST_DISTANCE(s1.THE_GEOM, s2.THE_GEOM) <= 0.1"
+    sql.execute(relationSql)
 
-    sql.execute("CREATE SPATIAL INDEX IF NOT EXISTS BUILDING_GEOM_INDEX ON " + "BUILDINGS" + "(THE_GEOM)")
+    // Aggregate neighbouring geometries per building before subtracting (avoids GROUP BY geometry issues on PostgreSQL)
+    sql.execute("DROP TABLE IF EXISTS tmp_buildings_neighbors")
+    sql.execute("CREATE TABLE tmp_buildings_neighbors AS " +
+      "SELECT r.PK_BUILDING, ST_Collect(s2.the_geom) AS neighbors_geom " +
+      "FROM tmp_relation_buildings_buildings r " +
+      "JOIN MAP_BUILDINGS_GEOM s2 ON s2.ID_WAY = r.PK2_BUILDING " +
+      "GROUP BY r.PK_BUILDING")
+
+    sql.execute("DROP TABLE IF EXISTS tmp_buildings_truncated")
+    sql.execute("CREATE TABLE tmp_buildings_truncated AS " +
+      "SELECT s1.ID_WAY AS PK_BUILDING, " +
+      "       ST_Difference(s1.the_geom, ST_Buffer(n.neighbors_geom, 0.1, 'join=mitre')) AS the_geom, " +
+      "       s1.HEIGHT AS HEIGHT " +
+      "FROM MAP_BUILDINGS_GEOM s1 " +
+      "JOIN tmp_buildings_neighbors n ON n.PK_BUILDING = s1.ID_WAY " +
+      "WHERE n.neighbors_geom IS NOT NULL")
+
+    // Merge original buildings with altered geometries
+    sql.execute("DROP TABLE IF EXISTS BUILDINGS")
+    String createBuildingsSelect = "SELECT s.id_way AS PK, ST_SetSRID(s.the_geom, " + srid + ") AS THE_GEOM, s.HEIGHT AS HEIGHT " +
+      "FROM MAP_BUILDINGS_GEOM s " +
+      "WHERE s.id_way NOT IN (SELECT PK_BUILDING FROM tmp_buildings_truncated) " +
+      "UNION ALL " +
+      "SELECT PK_BUILDING AS PK, ST_SetSRID(the_geom, " + srid + ") AS THE_GEOM, HEIGHT AS HEIGHT " +
+      "FROM tmp_buildings_truncated " +
+      "WHERE the_geom IS NOT NULL AND NOT ST_IsEmpty(the_geom)"
+
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        sql.execute("CREATE TABLE BUILDINGS AS " + createBuildingsSelect)
+        sql.execute("ALTER TABLE BUILDINGS ADD PRIMARY KEY (PK)")
+        DatabaseHelper.ensureSRID(connection, "BUILDINGS", "THE_GEOM", srid)
+    } else {
+        sql.execute("CREATE TABLE BUILDINGS(PK INTEGER PRIMARY KEY, THE_GEOM GEOMETRY, HEIGHT real) AS " + createBuildingsSelect)
+    }
+
+    // Clean temporary tables
+    sql.execute("DROP TABLE IF EXISTS tmp_buildings_truncated")
+    sql.execute("DROP TABLE IF EXISTS tmp_buildings_neighbors")
+    sql.execute("DROP TABLE IF EXISTS tmp_relation_buildings_buildings")
+    sql.execute("DROP TABLE IF EXISTS MAP_BUILDINGS_GEOM")
+
+    // Create spatial index (cross-database compatible)
+    DatabaseHelper.createSpatialIndex(connection, "BUILDINGS", 'THE_GEOM', 'BUILDING_GEOM_INDEX')
 
 
     sql.execute("DROP TABLE IF EXISTS PEDESTRIAN_WAYS")
     sql.execute("CREATE TABLE PEDESTRIAN_WAYS (PK serial PRIMARY KEY, ID_WAY integer, THE_GEOM geometry, TYPE varchar);")
 
-    for (PedestrianWay pedestrianWay: handler.pedestrianWays) {
+  String geomTransformExpr = "ST_TRANSFORM(ST_GeomFromText(?, 4326), " + srid + ")"
+  String simplifiedGeomExpr
+  if (DatabaseHelper.isPostgreSQL(connection)) {
+    simplifiedGeomExpr = "ST_SnapToGrid(ST_SimplifyPreserveTopology(" + geomTransformExpr + ", 0.01), 0.1)"
+  } else {
+    simplifiedGeomExpr = "ST_precisionreducer(ST_SimplifyPreserveTopology(" + geomTransformExpr + ",0.01),0.1)"
+  }
+  String finalGeomExpr = "st_setsrid(" + simplifiedGeomExpr + ", " + srid + ")"
+
+  for (PedestrianWay pedestrianWay: handler.pedestrianWays) {
         if (pedestrianWay.geom.isEmpty()) {
             continue;
         }
@@ -167,11 +214,12 @@ def exec(Connection connection, input) {
                 'THE_GEOM, ' +
                 'TYPE ) ' +
                 ' VALUES (?,' +
-                'st_setsrid(ST_precisionreducer(ST_SIMPLIFYPRESERVETOPOLOGY(ST_TRANSFORM(ST_GeomFromText(?, 4326), '+srid+'),0.01),0.1), ' + srid + '),' +
+        finalGeomExpr + ',' +
                 '?);'
-        sql.execute(query, [pedestrianWay.id, pedestrianWay.geom, pedestrianWay.type])
+  sql.execute(query, [pedestrianWay.id, pedestrianWay.geom.toText(), pedestrianWay.type])
     }
-    sql.execute("CREATE SPATIAL INDEX IF NOT EXISTS PEDESTRIAN_WAYS_GEOM_INDEX ON " + "PEDESTRIAN_WAYS" + "(THE_GEOM)")
+    // Create spatial index (cross-database compatible)
+    DatabaseHelper.createSpatialIndex(connection, "PEDESTRIAN_WAYS", 'THE_GEOM', 'PEDESTRIAN_WAYS_GEOM_INDEX')
 
 
     sql.execute("DROP TABLE IF EXISTS PEDESTRIAN_POIS")
@@ -185,15 +233,17 @@ def exec(Connection connection, input) {
                 'THE_GEOM, ' +
                 'TYPE ) ' +
                 ' VALUES (?,' +
-                'st_setsrid(ST_precisionreducer(ST_SIMPLIFYPRESERVETOPOLOGY(ST_TRANSFORM(ST_GeomFromText(?, 4326), '+srid+'),0.01),0.1), ' + srid + '),' +
+                finalGeomExpr + ',' +
                 '?);'
-        sql.execute(query, [pedestrianPOI.id, pedestrianPOI.geom, pedestrianPOI.type])
+  sql.execute(query, [pedestrianPOI.id, pedestrianPOI.geom.toText(), pedestrianPOI.type])
     }
-    sql.execute("CREATE SPATIAL INDEX IF NOT EXISTS PEDESTRIAN_POIS_GEOM_INDEX ON " + "PEDESTRIAN_POIS" + "(THE_GEOM)")
+    // Create spatial index (cross-database compatible)
+    DatabaseHelper.createSpatialIndex(connection, "PEDESTRIAN_POIS", 'THE_GEOM', 'PEDESTRIAN_POIS_GEOM_INDEX')
 
 
-    sql.execute("DROP TABLE IF EXISTS GROUND")
-    sql.execute("CREATE TABLE GROUND (PK serial PRIMARY KEY,ID_WAY BIGINT, TYPE varchar, THE_GEOM geometry,PRIORITY int, G double);")
+  sql.execute("DROP TABLE IF EXISTS GROUND")
+  String groundTableType = DatabaseHelper.isPostgreSQL(connection) ? "double precision" : "double"
+  sql.execute("CREATE TABLE GROUND (PK serial PRIMARY KEY,ID_WAY BIGINT, TYPE varchar, THE_GEOM geometry,PRIORITY int, G " + groundTableType + ");")
 
 
     for (Grounds grounds : handler.grounds) {
@@ -206,140 +256,176 @@ def exec(Connection connection, input) {
 
         String query = 'INSERT INTO GROUND(ID_WAY, THE_GEOM, TYPE, PRIORITY ,G ) ' +
                 ' VALUES (?,' +
-                'st_setsrid(ST_precisionreducer(ST_SIMPLIFYPRESERVETOPOLOGY(ST_TRANSFORM(ST_GeomFromText(?, 4326), '+srid+'),0.01),0.1), ' + srid + '),' +
+    finalGeomExpr + ',' +
                 '?, ?, ?);'
 
-        sql.execute(query, [grounds.id, grounds.geom, grounds.type, grounds.priority , grounds.coeff_G])
+  sql.execute(query, [grounds.id, grounds.geom.toText(), grounds.type, grounds.priority , grounds.coeff_G])
     }
-    sql.execute("CREATE SPATIAL INDEX IF NOT EXISTS GROUND_GEOM_INDEX ON " + "GROUND" + "(THE_GEOM)")
+    // Create spatial index (cross-database compatible)
+    DatabaseHelper.createSpatialIndex(connection, "GROUND", 'THE_GEOM', 'GROUND_GEOM_INDEX')
 
     logger.info('SQL INSERT done')
 
 
-    String query2 = '''-- Define Road width
-            DROP TABLE ROADS IF EXISTS;
-            CREATE TABLE ROADS(the_geom geometry, wb float, PK INTEGER) AS SELECT
-            ST_FORCE2D(the_geom),
-            CASEWHEN(TYPE = 'primary', 6,
-            CASEWHEN(TYPE = 'primary_link', 6,
-            CASEWHEN(TYPE = 'secondary', 6,
-            CASEWHEN(TYPE = 'secondary_link', 6,
-            CASEWHEN(TYPE = 'tertiary', 3.5,
-            CASEWHEN(TYPE = 'tertiary_link', 3.5,
-            CASEWHEN(TYPE = 'motorway', 6,
-            CASEWHEN(TYPE = 'motorway_link', 6,
-            CASEWHEN(TYPE = 'trunk', 6,
-            CASEWHEN(TYPE = 'trunk_link', 6,
-            CASEWHEN(TYPE = 'cycleway', 1.75,
-            CASEWHEN(TYPE = 'residential', 3.5,
-            CASEWHEN(TYPE = 'bus_guideway', 3.5,
-            CASEWHEN(TYPE = 'busway', 3.5,
-            CASEWHEN(TYPE = 'road', 3.5,
-            CASEWHEN(TYPE = 'escape', 3.5,
-            CASEWHEN(TYPE = 'raceway', 3.5,
-            CASEWHEN(TYPE = 'road', 3.5,
-            CASEWHEN(TYPE = 'unclassified', 6, 0))))))))))))))))))),
-            PK
-            FROM PEDESTRIAN_WAYS;
-            
-            -- Create Sidewalk layer
-            DROP TABLE sidewalk IF EXISTS;
-            CREATE TABLE sidewalk(the_geom geometry,lt float, PK float) AS
-            SELECT
-            the_geom,
-            CASEWHEN(TYPE = 'primary', 0,
-            CASEWHEN(TYPE = 'primary_link', 0,
-            CASEWHEN(TYPE = 'secondary', 0,
-            CASEWHEN(TYPE = 'secondary_link', 0,
-            CASEWHEN(TYPE = 'tertiary', 2,
-            CASEWHEN(TYPE = 'tertiary_link', 2,
-            CASEWHEN(TYPE = 'motorway', 0,
-            CASEWHEN(TYPE = 'motorway_link', 0,
-            CASEWHEN(TYPE = 'trunk', 0,
-            CASEWHEN(TYPE = 'trunk_link', 0,
-            CASEWHEN(TYPE = 'cycleway', 1,
-            CASEWHEN(TYPE = 'residential', 2,
-            CASEWHEN(TYPE = 'bus_guideway', 2,
-            CASEWHEN(TYPE = 'busway',2,
-            CASEWHEN(TYPE = 'road', 1.5,
-            CASEWHEN(TYPE = 'escape', 1.5,
-            CASEWHEN(TYPE = 'raceway', 1.5,
-            CASEWHEN(TYPE = 'road', 1.5,
-            CASEWHEN(TYPE = 'unclassified', 1.5, 0))))))))))))))))))),
-            PK
-            FROM PEDESTRIAN_WAYS;
-            
-            -- Create Road + Sidewalk layer
-            DROP TABLE roads_sidewalk IF EXISTS;
-            CREATE TABLE roads_sidewalk(the_geom geometry) AS
-            SELECT ST_UNION(ST_ACCUM(ST_PRECISIONREDUCER(ST_BUFFER(a.the_geom,a.wb + 2*b.lt),0.1))) FROM ROADS a, sidewalk b WHERE a.PK = b.PK;
-            DROP TABLE sidewalk IF EXISTS;
-            
-            -- Create PedestrianNetwork
-            DROP TABLE pedestrian_streets IF EXISTS;
-             CREATE TABLE pedestrian_streets AS SELECT ST_UNION(ST_ACCUM(ST_PRECISIONREDUCER(ST_BUFFER(the_geom,3.0),0.1))) the_geom FROM PEDESTRIAN_WAYS
-            WHERE
-            TYPE = 'pedestrian'
-            OR TYPE = 'path'
-            OR TYPE = 'footway'
-            OR TYPE = 'living_street'
-            OR TYPE = 'crossing'
-            OR TYPE = 'service'
-            OR TYPE = 'sidewalk'
-            OR TYPE = 'steps';
-            
-            -- Create Full area where pedestrians can be
-            DROP TABLE RoadsAndPedestrianStreets IF EXISTS;
-            CREATE TABLE RoadsAndPedestrianStreets AS
-            SELECT * FROM  PEDESTRIAN_STREETS ps UNION SELECT  * FROM  roads_sidewalk rb ;
-            DROP TABLE PEDESTRIAN_STREETS_AREA IF EXISTS;
-            CREATE TABLE PEDESTRIAN_STREETS_AREA AS SELECT ST_UNION(ST_ACCUM(the_geom)) the_geom FROM RoadsAndPedestrianStreets ps ;
-            DROP TABLE PEDESTRIAN_STREETS,RoadsAndPedestrianStreets, roads_sidewalk, PEDESTRIAN_STREETS IF EXISTS;
-            
-            -- Create Areas where Pedestrian can also be
-            DROP TABLE Ok_areas IF EXISTS;
-            CREATE TABLE Ok_areas AS SELECT ST_FORCE2D(ST_UNION(ST_ACCUM(the_geom))) the_geom FROM GROUND pa WHERE TYPE = 'park';
-            
-            DROP TABLE PEDESTRIAN_STREETS_AREA_GO_ZONES IF EXISTS;
-            CREATE TABLE PEDESTRIAN_STREETS_AREA_GO_ZONES AS
-            SELECT * FROM  PEDESTRIAN_STREETS_AREA ps UNION SELECT * FROM  Ok_areas rb ;
-            DROP TABLE PEDESTRIAN_STREETS_GO_ZONES_AREA IF EXISTS;
-            CREATE TABLE PEDESTRIAN_STREETS_GO_ZONES_AREA AS SELECT ST_UNION(ST_ACCUM(the_geom)) the_geom FROM PEDESTRIAN_STREETS_AREA_GO_ZONES ps ;
-            DROP TABLE PEDESTRIAN_STREETS, PEDESTRIAN_STREETS_AREA, roads_sidewalk,Ok_areas, PEDESTRIAN_STREETS,PEDESTRIAN_STREETS_AREA_GO_ZONES IF EXISTS;
-               
-            -- Remove Road Areas to final area
-            -- Create Roads area where Pedestrian can''t be
-            DROP TABLE ROADS_AREA IF EXISTS;
-            CREATE TABLE ROADS_AREA AS SELECT ST_FORCE2D(ST_UNION(ST_ACCUM(ST_PRECISIONREDUCER(ST_BUFFER(the_geom,wb),0.1)))) the_geom FROM ROADS;
-            
-            DROP TABLE PSA_ROADS IF EXISTS;
-            CREATE TABLE PSA_ROADS AS
-            SELECT ST_DIFFERENCE(b.the_geom, a.the_geom) the_geom FROM
-             ROADS_AREA a,
-             PEDESTRIAN_STREETS_GO_ZONES_AREA b;
-            DROP TABLE PEDESTRIAN_STREETS_GO_ZONES_AREA, ROADS, ROADS_AREA  IF EXISTS;
-            
-            -- Remove BUILDINGS Areas to final area
-            DROP TABLE BUILDINGS_AREA IF EXISTS;
-            CREATE TABLE BUILDINGS_AREA AS SELECT ST_FORCE2D(st_union(st_accum(ST_PRECISIONREDUCER(ST_BUFFER(the_geom,0.5),0.1)))) the_geom FROM BUILDINGS;
-            DROP TABLE PSA_ROADS_BUILDINGS IF EXISTS;
-            CREATE TABLE PSA_ROADS_BUILDINGS AS
-            SELECT ST_DIFFERENCE(b.the_geom, a.the_geom) the_geom FROM
-             BUILDINGS_AREA a,
-             PSA_ROADS b;
-            DROP TABLE PSA_ROADS,BUILDINGS_AREA  IF EXISTS;
-            
-            -- Remove NOGOZONES Areas to final area
-            -- Create Areas area where Pedestrian can''t be
-            DROP TABLE No_GoZones IF EXISTS;
-            CREATE TABLE No_GoZones AS SELECT ST_FORCE2D(ST_UNION(ST_ACCUM(the_geom))) the_geom FROM GROUND pa WHERE TYPE = 'water' OR TYPE ='parking';
-            
-            DROP TABLE PEDESTRIAN_AREA  IF EXISTS;
-            CREATE TABLE PEDESTRIAN_AREA AS
-            SELECT ST_DIFFERENCE(b.the_geom, a.the_geom) the_geom FROM
-             No_GoZones a,
-             PSA_ROADS_BUILDINGS b;
-            DROP TABLE PSA_ROADS_BUILDINGS,No_GoZones IF EXISTS;'''
+    String roadWidthCase = """CASE
+      WHEN TYPE = 'primary' THEN 6
+      WHEN TYPE = 'primary_link' THEN 6
+      WHEN TYPE = 'secondary' THEN 6
+      WHEN TYPE = 'secondary_link' THEN 6
+      WHEN TYPE = 'tertiary' THEN 3.5
+      WHEN TYPE = 'tertiary_link' THEN 3.5
+      WHEN TYPE = 'motorway' THEN 6
+      WHEN TYPE = 'motorway_link' THEN 6
+      WHEN TYPE = 'trunk' THEN 6
+      WHEN TYPE = 'trunk_link' THEN 6
+      WHEN TYPE = 'cycleway' THEN 1.75
+      WHEN TYPE = 'residential' THEN 3.5
+      WHEN TYPE = 'bus_guideway' THEN 3.5
+      WHEN TYPE = 'busway' THEN 3.5
+      WHEN TYPE = 'road' THEN 3.5
+      WHEN TYPE = 'escape' THEN 3.5
+      WHEN TYPE = 'raceway' THEN 3.5
+      WHEN TYPE = 'unclassified' THEN 6
+      ELSE 0
+  END"""
+
+    String sidewalkWidthCase = """CASE
+      WHEN TYPE = 'primary' THEN 0
+      WHEN TYPE = 'primary_link' THEN 0
+      WHEN TYPE = 'secondary' THEN 0
+      WHEN TYPE = 'secondary_link' THEN 0
+      WHEN TYPE = 'tertiary' THEN 2
+      WHEN TYPE = 'tertiary_link' THEN 2
+      WHEN TYPE = 'motorway' THEN 0
+      WHEN TYPE = 'motorway_link' THEN 0
+      WHEN TYPE = 'trunk' THEN 0
+      WHEN TYPE = 'trunk_link' THEN 0
+      WHEN TYPE = 'cycleway' THEN 1
+      WHEN TYPE = 'residential' THEN 2
+      WHEN TYPE = 'bus_guideway' THEN 2
+      WHEN TYPE = 'busway' THEN 2
+      WHEN TYPE = 'road' THEN 1.5
+      WHEN TYPE = 'escape' THEN 1.5
+      WHEN TYPE = 'raceway' THEN 1.5
+      WHEN TYPE = 'unclassified' THEN 1.5
+      ELSE 0
+  END"""
+
+  def applyPrecision = { String expr ->
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+      return "ST_SnapToGrid(ST_SimplifyPreserveTopology(" + expr + ", 0.1), 0.1)"
+    }
+    return "ST_PRECISIONREDUCER(" + expr + ",0.1)"
+  }
+
+  def aggregateGeometries = { String expr ->
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+      return "ST_UNION(" + expr + ")"
+    }
+    return "ST_UNION(ST_ACCUM(" + expr + "))"
+  }
+
+    String roadsSelect = "SELECT ST_FORCE2D(the_geom) AS the_geom, " +
+      (DatabaseHelper.isPostgreSQL(connection) ? "(" + roadWidthCase + ")::double precision AS wb" : roadWidthCase + " AS wb") +
+      ", PK FROM PEDESTRIAN_WAYS"
+    String sidewalkSelect = "SELECT the_geom, " +
+      (DatabaseHelper.isPostgreSQL(connection) ? "(" + sidewalkWidthCase + ")::double precision AS lt" : sidewalkWidthCase + " AS lt") +
+      ", " + (DatabaseHelper.isPostgreSQL(connection) ? "PK::double precision AS pk" : "PK") +
+      " FROM PEDESTRIAN_WAYS"
+
+    String roadsCreate = DatabaseHelper.isPostgreSQL(connection) ?
+      "CREATE TABLE ROADS AS " + roadsSelect + ";" :
+      "CREATE TABLE ROADS(the_geom geometry, wb float, PK INTEGER) AS " + roadsSelect + ";"
+
+    String sidewalkCreate = DatabaseHelper.isPostgreSQL(connection) ?
+      "CREATE TABLE sidewalk AS " + sidewalkSelect + ";" :
+      "CREATE TABLE sidewalk(the_geom geometry,lt float, PK float) AS " + sidewalkSelect + ";"
+
+  String roadsSidewalkSelect = "SELECT " + aggregateGeometries(applyPrecision("ST_BUFFER(a.the_geom,a.wb + 2*b.lt)")) + " AS the_geom FROM ROADS a, sidewalk b WHERE a.PK = b.PK"
+    String roadsSidewalkCreate = DatabaseHelper.isPostgreSQL(connection) ?
+      "CREATE TABLE roads_sidewalk AS " + roadsSidewalkSelect + ";" :
+      "CREATE TABLE roads_sidewalk(the_geom geometry) AS " + roadsSidewalkSelect + ";"
+
+  String pedestrianStreetsSelect = "SELECT " + aggregateGeometries(applyPrecision("ST_BUFFER(the_geom,3.0)")) + " AS the_geom FROM PEDESTRIAN_WAYS\n" +
+      "            WHERE\n" +
+      "            TYPE = 'pedestrian'\n" +
+      "            OR TYPE = 'path'\n" +
+      "            OR TYPE = 'footway'\n" +
+      "            OR TYPE = 'living_street'\n" +
+      "            OR TYPE = 'crossing'\n" +
+      "            OR TYPE = 'service'\n" +
+      "            OR TYPE = 'sidewalk'\n" +
+      "            OR TYPE = 'steps'"
+
+  String roadsAreaCreate = "CREATE TABLE ROADS_AREA AS SELECT ST_FORCE2D(" + aggregateGeometries(applyPrecision("ST_BUFFER(the_geom,wb)")) + ") AS the_geom FROM ROADS;"
+  String buildingsAreaCreate = "CREATE TABLE BUILDINGS_AREA AS SELECT ST_FORCE2D(" + aggregateGeometries(applyPrecision("ST_BUFFER(the_geom,0.5)")) + ") AS the_geom FROM BUILDINGS;"
+
+    StringBuilder query2Builder = new StringBuilder()
+    query2Builder.append("-- Define Road width\n")
+    query2Builder.append("DROP TABLE IF EXISTS ROADS;\n")
+    query2Builder.append(roadsCreate + "\n\n")
+    query2Builder.append("-- Create Sidewalk layer\n")
+    query2Builder.append("DROP TABLE IF EXISTS sidewalk;\n")
+    query2Builder.append(sidewalkCreate + "\n\n")
+    query2Builder.append("-- Create Road + Sidewalk layer\n")
+    query2Builder.append("DROP TABLE IF EXISTS roads_sidewalk;\n")
+    query2Builder.append(roadsSidewalkCreate + "\n")
+    query2Builder.append("DROP TABLE IF EXISTS sidewalk;\n\n")
+    query2Builder.append("-- Create PedestrianNetwork\n")
+    query2Builder.append("DROP TABLE IF EXISTS pedestrian_streets;\n")
+    query2Builder.append("CREATE TABLE pedestrian_streets AS " + pedestrianStreetsSelect + ";\n\n")
+    query2Builder.append("-- Create Full area where pedestrians can be\n")
+    query2Builder.append("DROP TABLE IF EXISTS RoadsAndPedestrianStreets;\n")
+    query2Builder.append("CREATE TABLE RoadsAndPedestrianStreets AS\n")
+    query2Builder.append("SELECT * FROM  PEDESTRIAN_STREETS ps UNION SELECT  * FROM  roads_sidewalk rb ;\n")
+    query2Builder.append("DROP TABLE IF EXISTS PEDESTRIAN_STREETS_AREA;\n")
+  query2Builder.append("CREATE TABLE PEDESTRIAN_STREETS_AREA AS SELECT " + aggregateGeometries("the_geom") + " AS the_geom FROM RoadsAndPedestrianStreets ps ;\n")
+    query2Builder.append("DROP TABLE IF EXISTS PEDESTRIAN_STREETS;\n")
+    query2Builder.append("DROP TABLE IF EXISTS RoadsAndPedestrianStreets;\n")
+    query2Builder.append("DROP TABLE IF EXISTS roads_sidewalk;\n\n")
+    query2Builder.append("-- Create Areas where Pedestrian can also be\n")
+    query2Builder.append("DROP TABLE IF EXISTS Ok_areas;\n")
+  query2Builder.append("CREATE TABLE Ok_areas AS SELECT ST_FORCE2D(" + aggregateGeometries("the_geom") + ") AS the_geom FROM GROUND pa WHERE TYPE = 'park';\n\n")
+    query2Builder.append("DROP TABLE IF EXISTS PEDESTRIAN_STREETS_AREA_GO_ZONES;\n")
+    query2Builder.append("CREATE TABLE PEDESTRIAN_STREETS_AREA_GO_ZONES AS\n")
+    query2Builder.append("SELECT * FROM  PEDESTRIAN_STREETS_AREA ps UNION SELECT * FROM  Ok_areas rb ;\n")
+    query2Builder.append("DROP TABLE IF EXISTS PEDESTRIAN_STREETS_GO_ZONES_AREA;\n")
+  query2Builder.append("CREATE TABLE PEDESTRIAN_STREETS_GO_ZONES_AREA AS SELECT " + aggregateGeometries("the_geom") + " AS the_geom FROM PEDESTRIAN_STREETS_AREA_GO_ZONES ps ;\n")
+    query2Builder.append("DROP TABLE IF EXISTS PEDESTRIAN_STREETS_AREA;\n")
+    query2Builder.append("DROP TABLE IF EXISTS Ok_areas;\n")
+    query2Builder.append("DROP TABLE IF EXISTS PEDESTRIAN_STREETS_AREA_GO_ZONES;\n\n")
+    query2Builder.append("-- Remove Road Areas to final area\n")
+    query2Builder.append("-- Create Roads area where Pedestrian can't be\n")
+    query2Builder.append("DROP TABLE IF EXISTS ROADS_AREA;\n")
+    query2Builder.append(roadsAreaCreate + "\n\n")
+    query2Builder.append("DROP TABLE IF EXISTS PSA_ROADS;\n")
+    query2Builder.append("CREATE TABLE PSA_ROADS AS\n")
+    query2Builder.append("SELECT ST_DIFFERENCE(b.the_geom, a.the_geom) AS the_geom FROM\n")
+    query2Builder.append(" ROADS_AREA a,\n PEDESTRIAN_STREETS_GO_ZONES_AREA b;\n")
+    query2Builder.append("DROP TABLE IF EXISTS PEDESTRIAN_STREETS_GO_ZONES_AREA;\n")
+    query2Builder.append("DROP TABLE IF EXISTS ROADS;\n")
+    query2Builder.append("DROP TABLE IF EXISTS ROADS_AREA;\n\n")
+    query2Builder.append("-- Remove BUILDINGS Areas to final area\n")
+    query2Builder.append("DROP TABLE IF EXISTS BUILDINGS_AREA;\n")
+    query2Builder.append(buildingsAreaCreate + "\n")
+    query2Builder.append("DROP TABLE IF EXISTS PSA_ROADS_BUILDINGS;\n")
+    query2Builder.append("CREATE TABLE PSA_ROADS_BUILDINGS AS\n")
+    query2Builder.append("SELECT ST_DIFFERENCE(b.the_geom, a.the_geom) AS the_geom FROM\n")
+    query2Builder.append(" BUILDINGS_AREA a,\n PSA_ROADS b;\n")
+    query2Builder.append("DROP TABLE IF EXISTS PSA_ROADS;\n")
+    query2Builder.append("DROP TABLE IF EXISTS BUILDINGS_AREA;\n\n")
+    query2Builder.append("-- Remove NOGOZONES Areas to final area\n")
+    query2Builder.append("-- Create Areas area where Pedestrian can't be\n")
+    query2Builder.append("DROP TABLE IF EXISTS No_GoZones;\n")
+  query2Builder.append("CREATE TABLE No_GoZones AS SELECT ST_FORCE2D(" + aggregateGeometries("the_geom") + ") AS the_geom FROM GROUND pa WHERE TYPE = 'water' OR TYPE ='parking';\n\n")
+    query2Builder.append("DROP TABLE IF EXISTS PEDESTRIAN_AREA;\n")
+    query2Builder.append("CREATE TABLE PEDESTRIAN_AREA AS\n")
+    query2Builder.append("SELECT ST_DIFFERENCE(b.the_geom, a.the_geom) AS the_geom FROM\n")
+    query2Builder.append(" No_GoZones a,\n PSA_ROADS_BUILDINGS b;\n")
+    query2Builder.append("DROP TABLE IF EXISTS PSA_ROADS_BUILDINGS;\n")
+    query2Builder.append("DROP TABLE IF EXISTS No_GoZones;")
+
+    String query2 = query2Builder.toString()
 
     logger.info('SQL Compute Pedestrian Areas')
 

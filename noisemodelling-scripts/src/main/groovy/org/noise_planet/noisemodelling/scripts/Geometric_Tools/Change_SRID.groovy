@@ -20,7 +20,10 @@ package org.noise_planet.noisemodelling.scripts.Geometric_Tools
 import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.TableLocation
+import org.h2gis.utilities.dbtypes.DBTypes
+import org.h2gis.utilities.dbtypes.DBUtils
 import org.h2gis.utilities.wrapper.ConnectionWrapper
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -69,6 +72,8 @@ def exec(Connection connection, input) {
     // output string, the information given back to the user
     String resultString = null
 
+    // Get DBTypes for proper table/column name handling
+    DBTypes dbType = DBUtils.getDBType(connection)
 
     // Create a logger to display messages in the geoserver logs and in the command prompt.
     Logger logger = LoggerFactory.getLogger("org.noise_planet.noisemodelling")
@@ -77,10 +82,9 @@ def exec(Connection connection, input) {
     logger.info('Start : Change SRID')
     logger.info("inputs {}", input) // log inputs of the run
 
-    // Get name of the table
-    String tableName = input["tableName"] as String
-    // do it case-insensitive
-    tableName = tableName.toUpperCase()
+    // Get table name and parse into TableLocation object
+    String tableName = TableLocation.capsIdentifier(input["tableName"] as String, dbType)
+    TableLocation tableNameLoc = TableLocation.parse(tableName, dbType)
 
     // Get new SRID
     Integer newSrid = input['newSRID'] as Integer
@@ -89,9 +93,8 @@ def exec(Connection connection, input) {
     // Create a connection statement to interact with the database in SQL
     Statement stmt = connection.createStatement()
 
-
     // get the PrimaryKey field if exists to keep it in the final table
-    int pkIndex = JDBCUtilities.getIntegerPrimaryKey(connection, new TableLocation(tableName))
+    int pkIndex = DatabaseHelper.getIntegerPrimaryKey(connection, DatabaseHelper.normalizeTableName(connection, tableName))
 
     // Build the result string with every tables
     StringBuilder sbFields = new StringBuilder()
@@ -101,7 +104,7 @@ def exec(Connection connection, input) {
     String pkField = ""
     fields.each {
         f ->
-            if (f != "THE_GEOM") {
+            if (f.toUpperCase() != "THE_GEOM") {
                 sbFields.append(String.format(" , %s ", f))
             }
             if (pkIndex == k) pkField = f.toString()
@@ -110,18 +113,30 @@ def exec(Connection connection, input) {
 
 
     //get SRID of the table
-    int srid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(tableName))
+    int srid = GeometryTableUtilities.getSRID(connection, tableNameLoc)
     // if a SRID exists
     if (srid > 0) {
         if (srid == newSrid)
             resultString = "The table already counts " + newSrid.toString() + " as SRID."
         else {
-            stmt.execute("CREATE table temp as select ST_Transform(the_geom," + newSrid.toInteger() + ") THE_GEOM" + sbFields + " FROM " + TableLocation.parse(tableName).toString())
-            stmt.execute("DROP TABLE " + TableLocation.parse(tableName).toString())
-            stmt.execute("CREATE TABLE " + TableLocation.parse(tableName).toString() + " AS SELECT * FROM TEMP")
+            stmt.execute("CREATE table temp as select ST_Transform(the_geom," + newSrid.toInteger() + ") THE_GEOM" + sbFields + " FROM " + tableNameLoc.toString())
+            stmt.execute("DROP TABLE " + tableNameLoc.toString())
+            stmt.execute("CREATE TABLE " + tableNameLoc.toString() + " AS SELECT * FROM TEMP")
             stmt.execute("DROP TABLE TEMP")
+            
+            // Register geometry column metadata for PostgreSQL
+            if ((dbType == DBTypes.POSTGRESQL || dbType == DBTypes.POSTGIS)) {
+                // Explicitly set geometry type with SRID for PostgreSQL
+                stmt.execute(String.format("ALTER TABLE %s ALTER COLUMN THE_GEOM TYPE geometry USING ST_SetSRID(THE_GEOM, %d)",
+                        TableLocation.parse(tableName, dbType), newSrid))
+            }
+            
             if (pkField != "") {
-                stmt.execute("ALTER TABLE " + tableName.toString() + " ALTER COLUMN " + pkField + " INT NOT NULL;")
+                if (DatabaseHelper.isPostgreSQL(connection)) {
+                    stmt.execute("ALTER TABLE " + tableName.toString() + " ALTER COLUMN " + pkField + " SET NOT NULL;")
+                } else {
+                    stmt.execute("ALTER TABLE " + tableName.toString() + " ALTER COLUMN " + pkField + " INT NOT NULL;")
+                }
                 stmt.execute("ALTER TABLE " + tableName.toString() + " ADD PRIMARY KEY (" + pkField + ");  ")
             }
             resultString = "SRID changed from " + srid.toString() + " to " + newSrid.toString() + "."
@@ -131,8 +146,20 @@ def exec(Connection connection, input) {
         stmt.execute("DROP TABLE " + TableLocation.parse(tableName).toString())
         stmt.execute("CREATE TABLE " + TableLocation.parse(tableName).toString() + " AS SELECT * FROM TEMP")
         stmt.execute("DROP TABLE TEMP")
+        
+        // Register geometry column metadata for PostgreSQL
+        if ((dbType == DBTypes.POSTGRESQL || dbType == DBTypes.POSTGIS)) {
+            // Explicitly set geometry type with SRID for PostgreSQL
+            stmt.execute(String.format("ALTER TABLE %s ALTER COLUMN THE_GEOM TYPE geometry USING ST_SetSRID(THE_GEOM, %d)",
+                    TableLocation.parse(tableName, dbType), newSrid))
+        }
+        
         if (pkField != "") {
-            stmt.execute("ALTER TABLE " + tableName.toString() + " ALTER COLUMN " + pkField + " INT NOT NULL;")
+            if (DatabaseHelper.isPostgreSQL(connection)) {
+                stmt.execute("ALTER TABLE " + tableName.toString() + " ALTER COLUMN " + pkField + " SET NOT NULL;")
+            } else {
+                stmt.execute("ALTER TABLE " + tableName.toString() + " ALTER COLUMN " + pkField + " INT NOT NULL;")
+            }
             stmt.execute("ALTER TABLE " + tableName.toString() + " ADD PRIMARY KEY (" + pkField + ");  ")
         }
         resultString = "No SRID found ! Table " + tableName.toString() + " has now the SRID : " + newSrid.toString() + "."

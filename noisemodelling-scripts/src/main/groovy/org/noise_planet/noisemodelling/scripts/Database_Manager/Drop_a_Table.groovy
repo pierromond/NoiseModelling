@@ -19,6 +19,8 @@ package org.noise_planet.noisemodelling.scripts.Database_Manager
 
 import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.TableLocation
+import org.h2gis.utilities.dbtypes.DBTypes
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -59,10 +61,8 @@ def exec(Connection connection, input) {
     logger.info("inputs {}", input) // log inputs of the run
 
 
-    // Get name of the table to drop
+    // Get name of the table to drop (use as-is - databases handle case naturally)
     String tableToDrop = input['tableToDrop'] as String
-    // do it case-insensitive
-    tableToDrop = tableToDrop.toUpperCase()
 
     // list of the system tables
     List<String> ignorelst = ["SPATIAL_REF_SYS", "GEOMETRY_COLUMNS"]
@@ -70,20 +70,37 @@ def exec(Connection connection, input) {
     // flag to get out of the loop
     int flag = 0
 
+    // Normalize table name for comparison and output message
+    String tableToDropNormalized = DatabaseHelper.normalizeTableName(connection, tableToDrop)
+
+    // Get schema name based on database type
+    DBTypes dbType = DatabaseHelper.getDBType(connection)
+    String schemaName
+    if (dbType == DBTypes.POSTGRESQL) {
+        // Get current schema for PostgreSQL
+        def stmt = connection.createStatement()
+        def rs = stmt.executeQuery("SELECT current_schema()")
+        schemaName = rs.next() ? rs.getString(1) : "public"
+        rs.close()
+        stmt.close()
+    } else {
+        schemaName = "PUBLIC"
+    }
+
     // Get every table names
-    List<String> tables = JDBCUtilities.getTableNames(connection, null, "PUBLIC", "%", null)
+    List<String> tables = JDBCUtilities.getTableNames(connection, null, schemaName, "%", null)
     // Loop over the tables
     tables.each { t ->
         TableLocation tab = TableLocation.parse(t)
         if (!ignorelst.contains(tab.getTable())) {
-            // If name of the actual table is the same than the name of the table to drop
-            if (tab.getTable() == tableToDrop) {
+            // If name of the actual table is the same than the name of the table to drop (case-insensitive comparison)
+            if (tab.getTable() == tableToDropNormalized) {
                 // Create a connection statement to interact with the database in SQL
                 Statement stmt = connection.createStatement()
                 // Drop the table
                 String dropTable = "Drop table if exists " + tableToDrop
                 stmt.execute(dropTable)
-                resultString = "The table " + tableToDrop + " was dropped !"
+                resultString = "The table " + tableToDropNormalized + " was dropped !"
                 flag = 1
             }
         }

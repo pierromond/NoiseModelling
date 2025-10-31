@@ -23,6 +23,7 @@ import org.noise_planet.noisemodelling.scripts.Database_Manager.Display_Database
 import org.noise_planet.noisemodelling.scripts.Database_Manager.Drop_a_Table
 import org.noise_planet.noisemodelling.scripts.Database_Manager.Table_Visualization_Data
 import org.noise_planet.noisemodelling.scripts.Database_Manager.Table_Visualization_Map
+import org.noise_planet.noisemodelling.scripts.TestSupport.DatabaseTestHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.junit.jupiter.api.AfterEach
@@ -35,25 +36,29 @@ import java.sql.Connection
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.sql.Statement
+import java.util.UUID
 
 /**
  * Test parsing of zip file using H2GIS database
  */
 
 
-class TestDatabaseManager{
-    private Connection connection;
+class TestDatabaseManager {
+    private Connection connection
 
     @BeforeEach
-    void tearUp(TestInfo testInfo) throws Exception {
-        connection = JDBCUtilities.wrapConnection(H2GISDBFactory.createSpatialDataBase(testInfo.getDisplayName(), true, ""));
+    void beforeEach(TestInfo testInfo) throws Exception {
+        String testName = testInfo?.getDisplayName() ?: "test"
+        String dbName = "testdb_" + testName.replaceAll("[^A-Za-z0-9]", "_") + "_" + UUID.randomUUID().toString().substring(0, 8)
+        connection = H2GISDBFactory.createSpatialDataBase(dbName, true)
     }
 
     @AfterEach
     void tearDown() throws Exception {
-        if (connection != null) {
-            connection.close();
+        if (connection != null && !connection.isClosed()) {
+            connection.close()
         }
+        connection = null
     }
     Logger LOGGER = LoggerFactory.getLogger(TestDatabaseManager.class)
 

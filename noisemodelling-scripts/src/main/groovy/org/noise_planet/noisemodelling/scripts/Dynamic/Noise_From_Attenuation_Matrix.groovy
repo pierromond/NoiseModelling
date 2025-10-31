@@ -21,6 +21,7 @@ import org.h2gis.utilities.TableLocation
 import org.h2gis.utilities.dbtypes.DBTypes
 import org.h2gis.utilities.dbtypes.DBUtils
 import org.h2gis.utilities.wrapper.ConnectionWrapper
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -96,10 +97,10 @@ def exec(Connection connection, input) {
         lwTable_sourceId = input['lwTable_sourceId']
     }
 
-
-    String outputTable = input['outputTable'].toString().toUpperCase()
-    String attenuationTable = input['attenuationTable'].toString().toUpperCase()
-    String lwTable = input['lwTable'].toString().toUpperCase()
+    // Use as-is from user - databases handle case naturally
+    String outputTable = DatabaseHelper.normalizeTableName(connection, input['outputTable'].toString())
+    String attenuationTable = input['attenuationTable'].toString()
+    String lwTable = input['lwTable'].toString()
     String timeString = "PERIOD"
     String prefix = "HZ"
 

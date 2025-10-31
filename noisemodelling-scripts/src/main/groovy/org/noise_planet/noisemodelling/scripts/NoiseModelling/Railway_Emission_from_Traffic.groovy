@@ -18,9 +18,11 @@ import org.h2gis.utilities.GeometryMetaData
 import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.SpatialResultSet
 import org.h2gis.utilities.TableLocation
+import org.h2gis.utilities.dbtypes.DBTypes
 import org.h2gis.utilities.dbtypes.DBUtils
 import org.h2gis.utilities.wrapper.ConnectionWrapper
 import org.noise_planet.noisemodelling.jdbc.EmissionTableGenerator
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -82,8 +84,14 @@ outputs = [result: [name: 'Result output string',
 def exec(Connection connection, input) {
     Logger LOGGER = LoggerFactory.getLogger("Railway_Emission_from_Traffic")
 
+    // Get DBTypes for proper table/column name handling
+    DBTypes dbType = DBUtils.getDBType(connection.unwrap(Connection.class))
+
     //Need to change the ConnectionWrapper to WpsConnectionWrapper to work under postGIS database
     connection = new ConnectionWrapper(connection)
+    
+    // Create Sql object for queries
+    Sql sql = new Sql(connection)
 
     // print to command window
     LOGGER.info('Start : Railway Emission from DEN')
@@ -92,35 +100,34 @@ def exec(Connection connection, input) {
     // Get every inputs
     // -------------------
 
-    String sources_geom_table_name = input['tableRailwayTrack'] as String
-    // do it case-insensitive
-    sources_geom_table_name = sources_geom_table_name.toUpperCase()
+    // Get table names and normalize them for cross-database compatibility
+    String sources_geom_table_name = DatabaseHelper.normalizeTableName(connection, input['tableRailwayTrack'] as String)
+    TableLocation sourcesGeomTableLoc = TableLocation.parse(sources_geom_table_name, dbType)
+    String sources_table_traffic_name = DatabaseHelper.normalizeTableName(connection, input['tableRailwayTraffic'] as String)
+    
+        // Get the geometry field of the source table
+        List<String> geomFields = GeometryTableUtilities.getGeometryColumnNames(connection, sourcesGeomTableLoc)
+        if (geomFields.isEmpty()) {
+                throw new SQLException(String.format("The table %s does not exists or does not contain a geometry field", sourcesGeomTableLoc))
+        }
+        String sourceGeomColumn = geomFields.get(0)
 
-    int sridSources = GeometryTableUtilities.getSRID(connection, TableLocation.parse(sources_geom_table_name))
-    if (sridSources == 3785 || sridSources == 4326) throw new IllegalArgumentException("Error : Please use a metric projection for "+sources_geom_table_name+".")
-    if (sridSources == 0) throw new IllegalArgumentException("Error : The table "+sources_geom_table_name+" does not have an associated spatial reference system. (missing prj file on import ?)")
-
-    String sources_table_traffic_name = input['tableRailwayTraffic'] as String
-    // do it case-insensitive
-    sources_table_traffic_name = sources_table_traffic_name.toUpperCase()
-
-    //Get the geometry field of the source table
-    TableLocation sourceTableIdentifier = TableLocation.parse(sources_geom_table_name)
-    List<String> geomFields = GeometryTableUtilities.getGeometryColumnNames(connection, sourceTableIdentifier)
-    if (geomFields.isEmpty()) {
-        throw new SQLException(String.format("The table %s does not exists or does not contain a geometry field", sourceTableIdentifier))
-    }
+        // Retrieve SRID using DatabaseHelper for cross-database support
+        int sridSources = DatabaseHelper.getTableSRID(connection, sources_geom_table_name, sourceGeomColumn)
+        if (sridSources == 3785 || sridSources == 4326) {
+                throw new IllegalArgumentException("Error : Please use a metric projection for " + sources_geom_table_name + ".")
+        }
+        if (sridSources == 0) {
+                throw new IllegalArgumentException("Error : The table " + sources_geom_table_name + " does not have an associated spatial reference system. (missing prj file on import ?)")
+        }
+        DatabaseHelper.ensureSRID(connection, sources_geom_table_name, sourceGeomColumn, sridSources)
 
 
     // -------------------
     // Init table LW_RAIL
     // -------------------
 
-
-    // Create a sql connection to interact with the database in SQL
-    Sql sql = new Sql(connection)
-
-    // Get size of the table (number of rail segments
+    // Get size of the table (number of rail segments)
     PreparedStatement st = connection.prepareStatement("SELECT COUNT(*) AS total FROM " + sources_geom_table_name)
     SpatialResultSet rs1 = st.executeQuery().unwrap(SpatialResultSet.class)
 
@@ -132,11 +139,8 @@ def exec(Connection connection, input) {
     EmissionTableGenerator.makeTrainLWTable(connection, sources_geom_table_name, sources_table_traffic_name,
             "LW_RAILWAY", "HZ")
 
-    TableLocation alterTable = TableLocation.parse("LW_RAILWAY", DBUtils.getDBType(connection))
-    GeometryMetaData metaData = GeometryTableUtilities.getMetaData(connection, alterTable, "THE_GEOM");
-    metaData.setSRID(sridSources);
-    sql.execute(String.format("ALTER TABLE %s ALTER COLUMN %s %s USING ST_SetSRID(%s,%d)", alterTable, "THE_GEOM",
-            metaData.getSQL(), "THE_GEOM" , metaData.getSRID()))
+    // Ensure SRID is properly set for the output table
+    DatabaseHelper.ensureSRID(connection, "LW_RAILWAY", "THE_GEOM", sridSources)
 
     resultString = "Calculation Done ! The table LW_RAILWAY has been created."
 

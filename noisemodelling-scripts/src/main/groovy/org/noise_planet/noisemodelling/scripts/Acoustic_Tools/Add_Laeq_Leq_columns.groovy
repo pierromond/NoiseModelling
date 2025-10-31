@@ -72,25 +72,38 @@ def exec(Connection connection, input) {
     // Get inputs
     // -------------------
 
-    // Get name of the prefix
+    // Détecter le type de base de données (pour gérer la casse)
+    String dbProductName = connection.getMetaData().getDatabaseProductName()
+    boolean isPostgreSQL = dbProductName.toLowerCase().contains("postgresql")
+
+    // Get name of the prefix (use as-is from user)
     String prefix = input['prefix'] as String
-    // do it case-insensitive
-    prefix = prefix.toUpperCase()
 
-    // Get name of the table
+    // Get name of the table (use as-is from user - databases handle case naturally)
     String table = input["tableName"] as String
-    // do it case-insensitive
-    table = table.toUpperCase()
-
 
     List<String> fields = JDBCUtilities.getColumnNames(connection, table)
-    if (!fields.contains("" + prefix + "63")) {
+    
+    // Check for column existence (case-insensitive for PostgreSQL compatibility)
+    String checkColumn = prefix + "63"
+    boolean hasColumn = fields.any { it.equalsIgnoreCase(checkColumn) }
+    if (!hasColumn) {
         resultString = "This table does not contain column with this suffix : " + prefix + ""
         return resultString
     }
 
-    sql.execute("ALTER TABLE " + table + " ADD COLUMN LEQA float as 10*log10((power(10,(" + prefix + "63-26.2)/10)+power(10,(" + prefix + "125-16.1)/10)+power(10,(" + prefix + "250-8.6)/10)+power(10,(" + prefix + "500-3.2)/10)+power(10,(" + prefix + "1000)/10)+power(10,(" + prefix + "2000+1.2)/10)+power(10,(" + prefix + "4000+1)/10)+power(10,(" + prefix + "8000-1.1)/10)))")
-    sql.execute("ALTER TABLE " + table + " ADD COLUMN LEQ float as 10*log10((power(10,(" + prefix + "63)/10)+power(10,(" + prefix + "125)/10)+power(10,(" + prefix + "250)/10)+power(10,(" + prefix + "500)/10)+power(10,(" + prefix + "1000)/10)+power(10,(" + prefix + "2000)/10)+power(10,(" + prefix + "4000)/10)+power(10,(" + prefix + "8000)/10)))")
+    // Pour PostGIS, on utilise une approche en deux étapes: ADD COLUMN + UPDATE
+    // Pour H2GIS, on peut utiliser la colonne calculée
+    if (isPostgreSQL) {
+        sql.execute("ALTER TABLE " + table + " ADD COLUMN LEQA float")
+        sql.execute("ALTER TABLE " + table + " ADD COLUMN LEQ float")
+        
+        sql.execute("UPDATE " + table + " SET LEQA = 10*log10((power(10,(" + prefix + "63-26.2)/10)+power(10,(" + prefix + "125-16.1)/10)+power(10,(" + prefix + "250-8.6)/10)+power(10,(" + prefix + "500-3.2)/10)+power(10,(" + prefix + "1000)/10)+power(10,(" + prefix + "2000+1.2)/10)+power(10,(" + prefix + "4000+1)/10)+power(10,(" + prefix + "8000-1.1)/10)))")
+        sql.execute("UPDATE " + table + " SET LEQ = 10*log10((power(10,(" + prefix + "63)/10)+power(10,(" + prefix + "125)/10)+power(10,(" + prefix + "250)/10)+power(10,(" + prefix + "500)/10)+power(10,(" + prefix + "1000)/10)+power(10,(" + prefix + "2000)/10)+power(10,(" + prefix + "4000)/10)+power(10,(" + prefix + "8000)/10)))")
+    } else {
+        sql.execute("ALTER TABLE " + table + " ADD COLUMN LEQA float as 10*log10((power(10,(" + prefix + "63-26.2)/10)+power(10,(" + prefix + "125-16.1)/10)+power(10,(" + prefix + "250-8.6)/10)+power(10,(" + prefix + "500-3.2)/10)+power(10,(" + prefix + "1000)/10)+power(10,(" + prefix + "2000+1.2)/10)+power(10,(" + prefix + "4000+1)/10)+power(10,(" + prefix + "8000-1.1)/10)))")
+        sql.execute("ALTER TABLE " + table + " ADD COLUMN LEQ float as 10*log10((power(10,(" + prefix + "63)/10)+power(10,(" + prefix + "125)/10)+power(10,(" + prefix + "250)/10)+power(10,(" + prefix + "500)/10)+power(10,(" + prefix + "1000)/10)+power(10,(" + prefix + "2000)/10)+power(10,(" + prefix + "4000)/10)+power(10,(" + prefix + "8000)/10)))")
+    }
 
     resultString = "The columns LEQA and LEQ have been added to the table: " + table + "."
 

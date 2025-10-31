@@ -23,6 +23,7 @@ import org.h2gis.functions.spatial.crs.ST_SetSRID
 import org.h2gis.functions.spatial.crs.ST_Transform
 import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.TableLocation
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.locationtech.jts.geom.Geometry
 import org.locationtech.jts.geom.GeometryFactory
 import org.locationtech.jts.io.WKTReader
@@ -149,7 +150,7 @@ def exec(connection, Map input) {
     if (input['receiverstablename']) {
         receivers_table_name = input['receiverstablename']
     }
-    receivers_table_name = receivers_table_name.toUpperCase()
+    receivers_table_name = DatabaseHelper.normalizeTableName(connection, receivers_table_name)
 
     Double delta = 10
     if (input['delta']) {
@@ -170,24 +171,26 @@ def exec(connection, Map input) {
     if (input['sourcesTableName']) {
         sources_table_name = input['sourcesTableName']
     }
-    sources_table_name = sources_table_name.toUpperCase()
 
     String building_table_name = ""
     if (input['buildingTableName']) {
         building_table_name = input['buildingTableName']
     }
-    building_table_name = building_table_name.toUpperCase()
+    
+    // Get database-specific column names
+    String geomColumn = DatabaseHelper.getGeometryColumnName(connection)
+    String heightColumn = DatabaseHelper.normalizeColumnName(connection, "HEIGHT")
 
-    // Try to find the best SRID for receivers table
+    // Try to find the best SRID for receivers table - use DatabaseHelper for PostgreSQL compatibility
     int srid = 0
     if(input['fenceTableName']) {
-        srid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(input['fenceTableName'] as String))
+        srid = DatabaseHelper.getTableSRID(connection, input['fenceTableName'] as String, geomColumn)
     }
     if(srid == 0 && input['buildingTableName']) {
-        srid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(building_table_name) as String)
+        srid = DatabaseHelper.getTableSRID(connection, building_table_name, geomColumn)
     }
     if (srid == 0 && input['sourcesTableName']) {
-        srid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(sources_table_name) as String)
+        srid = DatabaseHelper.getTableSRID(connection, sources_table_name, geomColumn)
     }
 
     Geometry fenceGeom = null
@@ -200,49 +203,69 @@ def exec(connection, Map input) {
         } else {
             throw new Exception("Unable to find buildings or sources SRID, ignore fence parameters")
         }
+    } else if (input['fenceTableName']) {
+        String fenceTableName = input['fenceTableName'] as String
+        fenceGeom = DatabaseHelper.getTableEnvelope(connection, fenceTableName, geomColumn)
     } else {
-        fenceGeom = GeometryTableUtilities.getEnvelope(connection, TableLocation.parse(input['fenceTableName'] as String), "THE_GEOM")
+        fenceGeom = DatabaseHelper.getTableEnvelope(connection, building_table_name, geomColumn)
     }
 
     //Delete previous receivers grid.
     sql.execute(String.format("DROP TABLE IF EXISTS %s", receivers_table_name))
 
-    sql.execute("CREATE TABLE " + receivers_table_name + "(THE_GEOM GEOMETRY, ID_COL INTEGER, ID_ROW INTEGER) AS SELECT ST_SETSRID(ST_UPDATEZ(THE_GEOM, " + h + "), " + srid + ") THE_GEOM, ID_COL, ID_ROW FROM ST_MakeGridPoints(ST_GeomFromText('" + fenceGeom + "')," + delta + "," + delta + ");")
-    sql.execute("ALTER TABLE " + receivers_table_name + " ADD COLUMN PK SERIAL PRIMARY KEY")
+    DatabaseHelper.createGridPointsTable(connection, receivers_table_name, fenceGeom, delta, h as double, srid, geomColumn)
 
     logger.info("Create spatial index on " + receivers_table_name)
-    sql.execute("Create spatial index on " + receivers_table_name + "(the_geom);")
+    // Create spatial index (cross-database compatible)
+    DatabaseHelper.createSpatialIndex(connection, receivers_table_name, geomColumn)
 
     if (input['fence']) {
         // Delete points outside geom but inside
-        sql.execute("DELETE FROM " + receivers_table_name + " WHERE NOT ST_Intersects(THE_GEOM, :geom)", ['geom': fenceGeom])
+        if (DatabaseHelper.isPostgreSQL(connection)) {
+            // PostgreSQL: convert geometry to WKT for prepared statement
+            String fenceWkt = fenceGeom.toString()
+            int fenceSrid = fenceGeom.getSRID()
+            sql.execute("DELETE FROM " + receivers_table_name + " WHERE NOT ST_Intersects(ST_Force2D(" + geomColumn + "), ST_Force2D(ST_SetSRID(ST_GeomFromText(:geomWkt), :geomSrid)))",
+                ['geomWkt': fenceWkt, 'geomSrid': fenceSrid])
+        } else {
+            // H2GIS: accepts Geometry directly
+            sql.execute("DELETE FROM " + receivers_table_name + " WHERE NOT ST_Intersects(" + geomColumn + ", :geom)", ['geom': fenceGeom])
+        }
     }
 
     if (input['buildingTableName']) {
         logger.info("Delete receivers inside buildings")
-        sql.execute("delete from " + receivers_table_name + " g where exists (select 1 from " + building_table_name + " b where ST_Z(g.the_geom) < b.HEIGHT and g.the_geom && b.the_geom and ST_INTERSECTS(g.the_geom, b.the_geom) and ST_distance(b.the_geom, g.the_geom) < 1 limit 1);")
+        sql.execute("delete from " + receivers_table_name + " g where exists (select 1 from " + building_table_name + " b where ST_Z(g." + geomColumn + ") < b." + heightColumn + " and g." + geomColumn + " && b." + geomColumn + " and ST_INTERSECTS(g." + geomColumn + ", b." + geomColumn + ") and ST_distance(b." + geomColumn + ", g." + geomColumn + ") < 1 limit 1);")
     }
     if (input['sourcesTableName']) {
         logger.info("Delete receivers near sources")
-        sql.execute("delete from " + receivers_table_name + " g where exists (select 1 from " + sources_table_name + " r where st_expand(g.the_geom, 1) && r.the_geom and st_distance(g.the_geom, r.the_geom) < 1 limit 1);")
+        sql.execute("delete from " + receivers_table_name + " g where exists (select 1 from " + sources_table_name + " r where st_expand(g." + geomColumn + ", 1) && r." + geomColumn + " and st_distance(g." + geomColumn + ", r." + geomColumn + ") < 1 limit 1);")
     }
     if(createTriangles) {
         sql.execute("DROP TABLE IF EXISTS TRIANGLES")
-        sql.execute("CREATE TABLE TRIANGLES(pk serial NOT NULL, the_geom geometry(POLYGON Z, "+srid+"), PK_1 integer not null," +
+        
+        // H2GIS uses "POLYGON Z", PostgreSQL uses "PolygonZ"
+        String polygonType = DatabaseHelper.isPostgreSQL(connection) ? "PolygonZ" : "POLYGON Z"
+        
+        sql.execute("CREATE TABLE TRIANGLES(pk serial NOT NULL, " + geomColumn + " geometry(" + polygonType + ", "+srid+"), PK_1 integer not null," +
                 " PK_2 integer not null, PK_3 integer not null, cell_id integer not null, PRIMARY KEY (PK))")
-        sql.execute("INSERT INTO TRIANGLES(THE_GEOM, PK_1, PK_2, PK_3, CELL_ID) " +
-                "SELECT ST_ConvexHull(ST_UNION(A.THE_GEOM, ST_UNION(B.THE_GEOM, C.THE_GEOM))) THE_GEOM, " +
+        sql.execute("INSERT INTO TRIANGLES(" + geomColumn + ", PK_1, PK_2, PK_3, CELL_ID) " +
+                "SELECT ST_ConvexHull(ST_UNION(A." + geomColumn + ", ST_UNION(B." + geomColumn + ", C." + geomColumn + "))) " + geomColumn + ", " +
                 "A.PK PK_1, B.PK PK_2, C.PK PK_3, 0" +
                 "  FROM "+receivers_table_name+" A, "+receivers_table_name+" B, "+receivers_table_name+" C " +
                 "WHERE A.ID_ROW = B.ID_ROW + 1 AND A.ID_COL  = B.ID_COL AND " +
                 "A.ID_ROW = C.ID_ROW + 1 AND A.ID_COL = C.ID_COL + 1;")
-        sql.execute("INSERT INTO TRIANGLES(THE_GEOM, PK_1, PK_2, PK_3, CELL_ID) " +
-                "SELECT ST_ConvexHull(ST_UNION(A.THE_GEOM, ST_UNION(B.THE_GEOM, C.THE_GEOM))) THE_GEOM, " +
+        sql.execute("INSERT INTO TRIANGLES(" + geomColumn + ", PK_1, PK_2, PK_3, CELL_ID) " +
+                "SELECT ST_ConvexHull(ST_UNION(A." + geomColumn + ", ST_UNION(B." + geomColumn + ", C." + geomColumn + "))) " + geomColumn + ", " +
                 "A.PK PK_1, B.PK PK_2, C.PK PK_3, 0" +
                 "  FROM "+receivers_table_name+" A, "+receivers_table_name+" B, "+receivers_table_name+" C " +
                 "WHERE A.ID_ROW = B.ID_ROW + 1 AND A.ID_COL  = B.ID_COL + 1" +
                 " AND A.ID_ROW = C.ID_ROW AND A.ID_COL = C.ID_COL + 1;")
     }
+
+    // Ensure SRID is properly set for PostgreSQL (fixes PostGIS metadata)
+    // Pass the explicit SRID since receiver generation may create geometries with SRID=0
+    DatabaseHelper.ensureSRID(connection, receivers_table_name, geomColumn, srid)
 
     return [tableNameCreated: "Process done. Table of receivers " + receivers_table_name + " created !"]
 }

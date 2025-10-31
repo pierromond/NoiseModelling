@@ -24,9 +24,12 @@ import org.h2gis.functions.spatial.crs.ST_Transform
 import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.TableLocation
+import org.h2gis.utilities.SpatialResultSet
 import org.h2gis.utilities.dbtypes.DBUtils
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.locationtech.jts.geom.*
 import org.locationtech.jts.io.WKTReader
+import org.locationtech.jts.io.WKBReader
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -129,8 +132,7 @@ def exec(Connection connection, input) {
     logger.info('Start : 3D Receivers grid around buildings')
     logger.info("inputs {}", input) // log inputs of the run
 
-
-    String receivers_table_name = "RECEIVERS"
+    String receivers_table_name = DatabaseHelper.normalizeTableName(connection, "RECEIVERS")
 
     Double delta = 10
     if (input['delta']) {
@@ -152,18 +154,23 @@ def exec(Connection connection, input) {
     if (input['sourcesTableName']) {
         sources_table_name = input['sourcesTableName']
     }
-    sources_table_name = sources_table_name.toUpperCase()
 
 
     String building_table_name = input['tableBuilding']
-    building_table_name = building_table_name.toUpperCase()
+    
+    // Get database-specific column names
+    String geomColumn = DatabaseHelper.getGeometryColumnName(connection)
+    String heightColumn = DatabaseHelper.normalizeColumnName(connection, "HEIGHT")
 
     Boolean hasPop = JDBCUtilities.hasField(connection, building_table_name, "POP")
     if (hasPop) logger.info("The building table has a column named POP.")
     if (!hasPop) logger.info("The building table has not a column named POP.")
 
-    if (!JDBCUtilities.hasField(connection, building_table_name, "HEIGHT")) {
+    if (!JDBCUtilities.hasField(connection, building_table_name, heightColumn)) {
         resultString = "To run this script, your input Buildings table must have column named HEIGHT."
+    // Ensure SRID is properly set for PostgreSQL (fixes PostGIS metadata)
+    DatabaseHelper.ensureSRID(connection, receivers_table_name, 'the_geom')
+
         return resultString
     }
 
@@ -171,10 +178,14 @@ def exec(Connection connection, input) {
     Sql sql = new Sql(connection)
     sql.execute(String.format("DROP TABLE IF EXISTS %s", receivers_table_name))
 
-    // Reproject fence
-    int targetSrid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(building_table_name))
+    // Normalize table names for H2GIS utility calls
+    String building_table_name_for_utils = DatabaseHelper.normalizeTableNameForUtilities(connection, building_table_name)
+    String sources_table_name_for_utils = DatabaseHelper.normalizeTableNameForUtilities(connection, sources_table_name)
+
+    // Reproject fence - use DatabaseHelper for PostgreSQL compatibility
+    int targetSrid = DatabaseHelper.getTableSRID(connection, building_table_name, geomColumn)
     if (targetSrid == 0 && input['sourcesTableName']) {
-        targetSrid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(sources_table_name))
+        targetSrid = DatabaseHelper.getTableSRID(connection, sources_table_name, geomColumn)
     }
 
     Geometry fenceGeom = null
@@ -188,13 +199,31 @@ def exec(Connection connection, input) {
             throw new Exception("Unable to find buildings or sources SRID, ignore fence parameters")
         }
     } else if (input['fenceTableName']) {
-        fenceGeom = GeometryTableUtilities.getEnvelope(connection, TableLocation.parse(input['fenceTableName'] as String), "THE_GEOM")
+        String fenceTableName = input['fenceTableName'] as String
+        String fenceTableName_for_utils = DatabaseHelper.normalizeTableNameForUtilities(connection, fenceTableName)
+        fenceGeom = DatabaseHelper.getTableEnvelope(connection, fenceTableName, geomColumn)
     }
 
 
-    def buildingPk = JDBCUtilities.getColumnName(connection, building_table_name,
-            JDBCUtilities.getIntegerPrimaryKey(connection,
-                    TableLocation.parse(building_table_name, DBUtils.getDBType(connection))))
+    // Get primary key column name with PostgreSQL workaround
+    String buildingPk = ""
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        // PostgreSQL workaround: query pg_index directly due to case sensitivity issue in JDBCUtilities
+        TableLocation buildingTable = TableLocation.parse(building_table_name_for_utils)
+        def row = sql.firstRow("""
+            SELECT a.attname 
+            FROM pg_index i 
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) 
+            WHERE i.indrelid = ?::regclass AND i.indisprimary
+        """, [buildingTable.toString()])
+        if (row) {
+            buildingPk = row.attname
+        }
+    } else {
+        buildingPk = JDBCUtilities.getColumnName(connection, building_table_name_for_utils,
+                JDBCUtilities.getIntegerPrimaryKey(connection,
+                        TableLocation.parse(building_table_name_for_utils, DBUtils.getDBType(connection))))
+    }
     logger.info('The input building table has a Primary Key named ' + buildingPk)
     if (buildingPk == "" || !buildingPk) {
         return "To run this script, your input Buildings table must have a Primary Key."
@@ -202,31 +231,93 @@ def exec(Connection connection, input) {
 
     sql.execute("DROP TABLE IF EXISTS tmp_receivers_lines")
     def filter_geom_query = ""
+    def queryParams = [distance_wall: distance]
+    
     if (fenceGeom != null) {
-        filter_geom_query = " WHERE the_geom && :fenceGeom AND ST_INTERSECTS(the_geom, :fenceGeom)";
+        if (DatabaseHelper.isPostgreSQL(connection)) {
+            // PostgreSQL: convert geometry to WKT for prepared statement
+            String wkt = fenceGeom.toString()
+            int srid = fenceGeom.getSRID()
+            filter_geom_query = " WHERE " + geomColumn + " && ST_SetSRID(ST_GeomFromText(:fenceGeomWkt), :fenceGeomSRID) " +
+                               "AND ST_INTERSECTS(" + geomColumn + ", ST_SetSRID(ST_GeomFromText(:fenceGeomWkt), :fenceGeomSRID))"
+            queryParams.fenceGeomWkt = wkt
+            queryParams.fenceGeomSRID = srid
+        } else {
+            // H2GIS: accepts Geometry directly
+            filter_geom_query = " WHERE " + geomColumn + " && :fenceGeom AND ST_INTERSECTS(" + geomColumn + ", :fenceGeom)"
+            queryParams.fenceGeom = fenceGeom
+        }
     }
+    
+    // Database-specific function for converting buffer boundary to lines
+    String toMultiLineFunc = DatabaseHelper.isPostgreSQL(connection) ? "ST_Boundary" : "ST_ToMultiLine"
+    
     // create line of receivers
     sql.execute("CREATE TABLE tmp_receivers_lines as SELECT " + buildingPk + " as pk_building, " +
-                "ST_SimplifyPreserveTopology(ST_ToMultiLine(ST_Buffer(the_geom, :distance_wall, 'join=bevel')), 0.05) the_geom, HEIGHT " +
-                "FROM " + building_table_name + filter_geom_query, [fenceGeom : fenceGeom, distance_wall: distance])
-    sql.execute("CREATE SPATIAL INDEX ON tmp_receivers_lines(the_geom)")
+                "ST_SimplifyPreserveTopology(" + toMultiLineFunc + "(ST_Buffer(" + geomColumn + ", :distance_wall, 'join=bevel')), 0.05) " + geomColumn + ", " + heightColumn + " " +
+                "FROM " + building_table_name + filter_geom_query, queryParams)
+    // Create spatial index (cross-database compatible)
+    DatabaseHelper.createSpatialIndex(connection, 'tmp_receivers_lines', geomColumn)
 
     // union of truncated receivers and non tructated, split line to points
     sql.execute("DROP TABLE IF EXISTS TMP_SCREENS_MERGE")
-    sql.execute("CREATE TABLE TMP_SCREENS_MERGE (the_geom geometry, hBuilding float, pk_building integer) as SELECT s.the_geom, s.height, s.pk_building FROM tmp_receivers_lines s WHERE not st_isempty(s.the_geom) ;")
-    sql.execute("ALTER TABLE TMP_SCREENS_MERGE ADD COLUMN PK SERIAL PRIMARY KEY")
+    
+    // PostgreSQL doesn't support CREATE TABLE (columns) AS SELECT
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        sql.execute("CREATE TABLE TMP_SCREENS_MERGE as SELECT s." + geomColumn + ", s." + heightColumn + ", s.pk_building FROM tmp_receivers_lines s WHERE not st_isempty(s." + geomColumn + ") ;")
+        // Rename columns if needed and add primary key
+        sql.execute("ALTER TABLE TMP_SCREENS_MERGE RENAME COLUMN " + heightColumn + " TO hBuilding")
+        sql.execute("ALTER TABLE TMP_SCREENS_MERGE ADD COLUMN PK SERIAL PRIMARY KEY")
+    } else {
+        sql.execute("CREATE TABLE TMP_SCREENS_MERGE (" + geomColumn + " geometry, hBuilding float, pk_building integer) as SELECT s." + geomColumn + ", s." + heightColumn + ", s.pk_building FROM tmp_receivers_lines s WHERE not st_isempty(s." + geomColumn + ") ;")
+        sql.execute("ALTER TABLE TMP_SCREENS_MERGE ADD COLUMN PK SERIAL PRIMARY KEY")
+    }
 
     // Collect all lines and convert into points using custom method
     sql.execute("DROP TABLE IF EXISTS TMP_SCREENS")
-    sql.execute("CREATE TABLE TMP_SCREENS(pk integer, the_geom geometry, level int, pk_building int)")
-    def qry = 'INSERT INTO TMP_SCREENS(pk, the_geom, level, pk_building) VALUES (?,?,?,?);'
+    
+    // PostgreSQL needs explicit geometry type with SRID in column definition
+    // Use PointZ for 3D coordinates
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        sql.execute("CREATE TABLE TMP_SCREENS(pk integer, " + geomColumn + " geometry(PointZ, " + targetSrid + "), level int, pk_building int)")
+    } else {
+        sql.execute("CREATE TABLE TMP_SCREENS(pk integer, " + geomColumn + " geometry, level int, pk_building int)")
+    }
+    
+    // Database-specific INSERT statement for geometry
+    def qry
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        // Use ST_MakePoint(x, y, z) for 3D points instead of ST_GeomFromText
+        qry = 'INSERT INTO TMP_SCREENS(pk, ' + geomColumn + ', level, pk_building) VALUES (?, ST_SetSRID(ST_MakePoint(?, ?, ?), ' + targetSrid + '), ?, ?);'
+    } else {
+        qry = 'INSERT INTO TMP_SCREENS(pk, ' + geomColumn + ', level, pk_building) VALUES (?,?,?,?);'
+    }
+    
     GeometryFactory factory = new GeometryFactory(new PrecisionModel(), targetSrid);
     sql.withBatch(100, qry) { ps ->
-        sql.eachRow("SELECT pk, the_geom, hBuilding, pk_building FROM TMP_SCREENS_MERGE") { row ->
+        // Cross-database geometry handling without SpatialResultSet unwrap
+        def stmt = connection.createStatement()
+        def rs = stmt.executeQuery("SELECT * FROM TMP_SCREENS_MERGE")
+        
+        // PostgreSQL normalizes column names to lowercase
+        String geomColName = DatabaseHelper.isPostgreSQL(connection) ? geomColumn.toLowerCase() : geomColumn
+        WKBReader wkbReader = DatabaseHelper.isPostgreSQL(connection) ? new WKBReader() : null
+        
+        while (rs.next()) {
             List<Coordinate> pts = new ArrayList<Coordinate>()
-            def geom = row[1] as Geometry
-            def hBuilding = row[2] as Double
-            def pk_building = row[3] as Integer
+            // Get geometry - use cross-database approach
+            Geometry geom
+            if (DatabaseHelper.isPostgreSQL(connection)) {
+                def pgGeom = rs.getObject(geomColName)
+                byte[] wkb = org.postgresql.util.PGobject.class.cast(pgGeom).getValue().decodeHex()
+                geom = wkbReader.read(wkb)
+            } else {
+                // H2GIS returns Geometry directly from getObject
+                geom = rs.getObject(geomColName) as Geometry
+            }
+            int pk = rs.getInt("pk")
+            def hBuilding = rs.getDouble("hBuilding")
+            def pk_building = rs.getInt("pk_building")
             if (geom instanceof LineString) {
                 splitLineStringIntoPoints(geom as LineString, delta, pts)
             } else if (geom instanceof MultiLineString) {
@@ -242,12 +333,22 @@ def exec(Connection connection, input) {
                         if (!Double.isNaN(pt.x) && !Double.isNaN(pt.y)) {
                             // define coordinates of receivers
                             Coordinate newCoord = new Coordinate(pt.x, pt.y, 1.5+i*h)
-                            ps.addBatch(row[0] as Integer, factory.createPoint(newCoord), i, pk_building)
+                            Point point = factory.createPoint(newCoord)
+                            
+                            // For PostgreSQL, INSERT uses ST_MakePoint(x, y, z) so we pass coordinates separately
+                            // For H2GIS, we pass the Geometry object directly
+                            if (DatabaseHelper.isPostgreSQL(connection)) {
+                                ps.addBatch(pk, newCoord.x, newCoord.y, newCoord.z, i, pk_building)
+                            } else {
+                                ps.addBatch(pk, point, i, pk_building)
+                            }
                         }
                     }
                 }
             }
         }
+        rs.close()
+        stmt.close()
     }
     sql.execute("DROP TABLE IF EXISTS TMP_SCREENS_MERGE")
     sql.execute("DROP TABLE IF EXISTS " + receivers_table_name)
@@ -257,24 +358,35 @@ def exec(Connection connection, input) {
         // buildings have no population attribute
         logger.info('Create RECEIVERS table...')
 
-        sql.execute("CREATE TABLE " + receivers_table_name + "(pk serial, the_geom geometry, level integer, pk_building integer);")
-        sql.execute("INSERT INTO " + receivers_table_name + " (the_geom, level, pk_building) " +
-                        "SELECT ST_SetSRID(the_geom," + targetSrid.toInteger() + "), level, pk_building FROM TMP_SCREENS;")
-        sql.execute("CREATE SPATIAL INDEX ON " + receivers_table_name + "(the_geom);")
+        sql.execute("CREATE TABLE " + receivers_table_name + "(pk serial, " + geomColumn + " geometry, level integer, pk_building integer);")
+        sql.execute("INSERT INTO " + receivers_table_name + " (" + geomColumn + ", level, pk_building) " +
+                        "SELECT ST_SetSRID(" + geomColumn + "," + targetSrid.toInteger() + "), level, pk_building FROM TMP_SCREENS;")
+        // Create spatial index (cross-database compatible)
+        DatabaseHelper.createSpatialIndex(connection, receivers_table_name, geomColumn)
 
         if (input['sourcesTableName']) {
             // Delete receivers near sources
             logger.info('Delete receivers near sources...')
-            sql.execute("CREATE SPATIAL INDEX ON " + sources_table_name + "(the_geom);")
+            // Create spatial index (cross-database compatible)
+            DatabaseHelper.createSpatialIndex(connection, sources_table_name, geomColumn)
             sql.execute("DELETE FROM " + receivers_table_name + " g WHERE exists  " +
                             "(SELECT 1 FROM " + sources_table_name + " r  " +
-                                "WHERE st_expand(g.the_geom, 1, 1) && r.the_geom and st_distance(g.the_geom, r.the_geom) < 1 limit 1);")
+                                "WHERE st_expand(g." + geomColumn + ", 1, 1) && r." + geomColumn + " and st_distance(g." + geomColumn + ", r." + geomColumn + ") < 1 limit 1);")
         }
 
         if (fenceGeom != null) {
             // Delete receiver not in fence filter
             logger.info('Delete receivers that are not in the fence')
-            sql.execute("DELETE FROM " + receivers_table_name + " g WHERE not ST_INTERSECTS(g.the_geom , :fenceGeom);", [fenceGeom : fenceGeom])
+            if (DatabaseHelper.isPostgreSQL(connection)) {
+                // PostgreSQL: convert geometry to WKT for prepared statement
+                String fenceWkt = fenceGeom.toString()
+                int fenceSrid = fenceGeom.getSRID()
+                sql.execute("DELETE FROM " + receivers_table_name + " g WHERE not ST_INTERSECTS(g." + geomColumn + " , ST_SetSRID(ST_GeomFromText(:fenceWkt), :fenceSrid));", 
+                    [fenceWkt: fenceWkt, fenceSrid: fenceSrid])
+            } else {
+                // H2GIS: accepts Geometry directly
+                sql.execute("DELETE FROM " + receivers_table_name + " g WHERE not ST_INTERSECTS(g." + geomColumn + " , :fenceGeom);", [fenceGeom : fenceGeom])
+            }
         }
     } else {
         // buildings have population attribute
@@ -283,49 +395,52 @@ def exec(Connection connection, input) {
         logger.info('Create RECEIVERS table...')
         
         sql.execute("DROP TABLE IF EXISTS tmp_receivers")
-        sql.execute("CREATE TABLE tmp_receivers(the_geom geometry, build_pk integer, level integer, pk_building integer)")
+        sql.execute("CREATE TABLE tmp_receivers(" + geomColumn + " geometry, build_pk integer, level integer, pk_building integer)")
         sql.execute("ALTER TABLE tmp_receivers ADD COLUMN PK SERIAL PRIMARY KEY")// Ajout Gwen
-        sql.execute("INSERT INTO tmp_receivers(the_geom, build_pk, level, pk_building) " +
-                        "SELECT ST_SetSRID(the_geom," + targetSrid.toInteger() + "), pk, level, pk_building FROM TMP_SCREENS;")
+        sql.execute("INSERT INTO tmp_receivers(" + geomColumn + ", build_pk, level, pk_building) " +
+                        "SELECT ST_SetSRID(" + geomColumn + "," + targetSrid.toInteger() + "), pk, level, pk_building FROM TMP_SCREENS;")
 
         if (input['sourcesTableName']) {
             // Delete receivers near sources
             logger.info('Delete receivers near sources...')
-            sql.execute("CREATE SPATIAL INDEX ON " + sources_table_name + "(the_geom);")
+            // Create spatial index (cross-database compatible)
+            DatabaseHelper.createSpatialIndex(connection, sources_table_name, geomColumn)
             sql.execute("DELETE FROM tmp_receivers g WHERE exists " +
                             "(SELECT 1 FROM " + sources_table_name + " r " +
-                                "WHERE st_expand(g.the_geom, 1, 1) && r.the_geom and st_distance(g.the_geom, r.the_geom) < 1 limit 1);")
+                                "WHERE st_expand(g." + geomColumn + ", 1, 1) && r." + geomColumn + " and st_distance(g." + geomColumn + ", r." + geomColumn + ") < 1 limit 1);")
         }
 
         if (fenceGeom != null) {
             // Delete receiver not in fence filter
             logger.info('Delete receivers that are not in the fence')
-            sql.execute("DELETE FROM tmp_receivers g WHERE not ST_INTERSECTS(g.the_geom , " +
+            sql.execute("DELETE FROM tmp_receivers g WHERE not ST_INTERSECTS(g." + geomColumn + " , " +
                     "ST_SETSRID(ST_GeomFromText('" + fenceGeom + "'), "+targetSrid.toInteger()+"));")
         }
 
         sql.execute("CREATE INDEX ON tmp_receivers(build_pk)")
-        sql.execute("CREATE TABLE " + receivers_table_name + "(pk serial, the_geom geometry, level integer, pop float, pk_building integer)")
-        sql.execute("INSERT INTO " + receivers_table_name + " (the_geom, level, pop, pk_building) " +
-                        "SELECT a.the_geom, a.level, b.pop/COUNT(DISTINCT aa.pk)::float, a.pk_building " +
+        sql.execute("CREATE TABLE " + receivers_table_name + "(pk serial, " + geomColumn + " geometry, level integer, pop float, pk_building integer)")
+        sql.execute("INSERT INTO " + receivers_table_name + " (" + geomColumn + ", level, pop, pk_building) " +
+                        "SELECT a." + geomColumn + ", a.level, b.pop/COUNT(DISTINCT aa.pk)::float, a.pk_building " +
                         "FROM tmp_receivers a, " + building_table_name + " b,tmp_receivers aa " +
                         "WHERE b." + buildingPk + " = a.pk_building AND a.build_pk = aa.build_pk " +
-                        "GROUP BY a.the_geom, a.build_pk, a.level, b.pop")
+                        "GROUP BY a." + geomColumn + ", a.build_pk, a.level, b.pop, a.pk_building")
         sql.execute("DROP TABLE IF EXISTS tmp_receivers")
     }
 
     logger.info("Delete receivers inside buildings")
     sql.execute("DELETE FROM " + receivers_table_name + " g WHERE exists " +
                     "(SELECT 1 FROM " + building_table_name + " b " +
-                        "WHERE ST_Z(g.the_geom) < b.HEIGHT and g.the_geom && b.the_geom and ST_INTERSECTS(g.the_geom, b.the_geom) limit 1);")
+                        "WHERE ST_Z(g." + geomColumn + ") < b." + heightColumn + " and g." + geomColumn + " && b." + geomColumn + " and ST_INTERSECTS(g." + geomColumn + ", b." + geomColumn + ") limit 1);")
 
 
     // cleaning
-    sql.execute("drop table TMP_SCREENS if exists")
-    sql.execute("drop table tmp_screen_truncated if exists")
-    sql.execute("drop table tmp_relation_screen_building if exists")
-    sql.execute("drop table tmp_receivers_lines if exists")
-    sql.execute("DROP TABLE IF EXISTS tmp_buildings if exists;")
+    String dropSyntax = DatabaseHelper.isPostgreSQL(connection) ? "DROP TABLE IF EXISTS" : "drop table"
+    String dropSuffix = DatabaseHelper.isPostgreSQL(connection) ? "" : " if exists"
+    sql.execute(dropSyntax + " TMP_SCREENS" + dropSuffix)
+    sql.execute(dropSyntax + " tmp_screen_truncated" + dropSuffix)
+    sql.execute(dropSyntax + " tmp_relation_screen_building" + dropSuffix)
+    sql.execute(dropSyntax + " tmp_receivers_lines" + dropSuffix)
+    sql.execute(dropSyntax + " tmp_buildings" + dropSuffix)
     // Process Done
     resultString = "Process done. The receivers table named " + receivers_table_name + " has been created!"
 
@@ -334,6 +449,9 @@ def exec(Connection connection, input) {
     logger.info('End : 3D Receivers grid around buildings')
 
     // print to WPS Builder
+    // Ensure SRID is properly set for PostgreSQL (fixes PostGIS metadata)
+    DatabaseHelper.ensureSRID(connection, receivers_table_name, 'the_geom')
+
     return resultString
 
 }

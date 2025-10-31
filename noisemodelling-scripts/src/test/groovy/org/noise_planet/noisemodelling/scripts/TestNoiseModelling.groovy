@@ -28,11 +28,13 @@ import org.noise_planet.noisemodelling.scripts.Geometric_Tools.Set_Height
 import org.noise_planet.noisemodelling.scripts.Import_and_Export.Export_Table
 import org.noise_planet.noisemodelling.scripts.Import_and_Export.Import_File
 import org.noise_planet.noisemodelling.scripts.NoiseModelling.*
+import org.noise_planet.noisemodelling.scripts.TestSupport.DatabaseTestHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
 import java.nio.file.Path
 import java.sql.Connection
+import java.util.UUID
 
 import static org.junit.jupiter.api.Assertions.*
 /**
@@ -42,21 +44,22 @@ import static org.junit.jupiter.api.Assertions.*
 
 class TestNoiseModelling {
     Logger LOGGER = LoggerFactory.getLogger(TestNoiseModelling.class)
-    private Connection connection;
+    private Connection connection
 
     @BeforeEach
-    void tearUp(TestInfo testInfo) throws Exception {
-        connection = JDBCUtilities.wrapConnection(H2GISDBFactory.createSpatialDataBase(testInfo.getDisplayName(), true, ""));
+    void beforeEach(TestInfo testInfo) throws Exception {
+        String testName = testInfo?.getDisplayName() ?: "test"
+        String dbName = "testdb_" + testName.replaceAll("[^A-Za-z0-9]", "_") + "_" + UUID.randomUUID().toString().substring(0, 8)
+        connection = H2GISDBFactory.createSpatialDataBase(dbName, true)
     }
 
     @AfterEach
     void tearDown() throws Exception {
-        if (connection != null) {
-            connection.close();
+        if (connection != null && !connection.isClosed()) {
+            connection.close()
         }
+        connection = null
     }
-
-
     @Test
     void testRoadEmissionFromDEN() {
 

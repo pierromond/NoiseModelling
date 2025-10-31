@@ -26,8 +26,11 @@ import org.h2gis.api.ProgressVisitor
 import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.TableLocation
+import org.h2gis.utilities.dbtypes.DBTypes
+import org.h2gis.utilities.dbtypes.DBUtils
 import org.h2gis.utilities.wrapper.ConnectionWrapper
-import org.noise_planet.noisemodelling.pathfinder.utils.profiler.RootProgressVisitor;
+import org.noise_planet.noisemodelling.pathfinder.utils.profiler.RootProgressVisitor
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -161,12 +164,26 @@ def exec(Connection connection, input) {
     // Build the result string with every tables
     StringBuilder sb = new StringBuilder()
 
+    // Get schema name based on database type
+    DBTypes dbType = DatabaseHelper.getDBType(connection)
+    String schemaName
+    if (dbType == DBTypes.POSTGRESQL) {
+        // Get current schema for PostgreSQL
+        def stmt = connection.createStatement()
+        def rs = stmt.executeQuery("SELECT current_schema()")
+        schemaName = rs.next() ? rs.getString(1) : "public"
+        rs.close()
+        stmt.close()
+    } else {
+        schemaName = "PUBLIC"
+    }
+
     // Get every table names
-    List<String> tables = JDBCUtilities.getTableNames(connection, null, "PUBLIC", "%", null)
+    List<String> tables = JDBCUtilities.getTableNames(connection, null, schemaName, "%", null)
 
     // Loop over the tables
     tables.each { t ->
-        TableLocation tab = TableLocation.parse(t)
+        TableLocation tab = TableLocation.parse(t, dbType)
         if (!ignorelst.contains(tab.getTable())) {
             // Add the name of the table in the string builder
             if (sb.size() > 0) {

@@ -14,8 +14,10 @@ import org.h2gis.utilities.*;
 import org.h2gis.utilities.dbtypes.DBTypes;
 import org.h2gis.utilities.dbtypes.DBUtils;
 import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.CoordinateSequenceFactory;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.locationtech.jts.index.strtree.STRtree;
 import org.locationtech.jts.io.WKTWriter;
@@ -24,6 +26,7 @@ import org.noise_planet.noisemodelling.jdbc.input.SceneDatabaseInputSettings;
 import org.noise_planet.noisemodelling.jdbc.input.SceneWithEmission;
 import org.noise_planet.noisemodelling.jdbc.output.DefaultCutPlaneProcessing;
 import org.noise_planet.noisemodelling.jdbc.utils.CellIndex;
+import org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper;
 import org.noise_planet.noisemodelling.pathfinder.CutPlaneVisitorFactory;
 import org.noise_planet.noisemodelling.pathfinder.PathFinder;
 import org.noise_planet.noisemodelling.pathfinder.utils.profiler.ProfilerThread;
@@ -216,7 +219,10 @@ public class NoiseMapByReceiverMaker extends GridMapMaker {
     @Override
     protected Envelope getComputationEnvelope(Connection connection) throws SQLException {
         DBTypes dbTypes = DBUtils.getDBType(connection);
-        Envelope envelopeInternal = GeometryTableUtilities.getEnvelope(connection, TableLocation.parse(receiverTableName, dbTypes)).getEnvelopeInternal();
+        Envelope envelopeInternal = GeometrySqlHelper.getTableEnvelope(connection, TableLocation.parse(receiverTableName, dbTypes));
+        if (envelopeInternal == null) {
+            throw new SQLException("Unable to retrieve envelope for table: " + receiverTableName);
+        }
         envelopeInternal.expandBy(maximumPropagationDistance);
         return envelopeInternal;
     }
@@ -232,6 +238,7 @@ public class NoiseMapByReceiverMaker extends GridMapMaker {
             throw new IllegalStateException("Call initialize before calling searchPopulatedCells");
         }
         Map<CellIndex, Integer> cellIndices = new HashMap<>();
+        DBTypes dbType = DBUtils.getDBType(connection);
         List<String> geometryFields = GeometryTableUtilities.getGeometryColumnNames(connection, TableLocation.parse(receiverTableName));
         String geometryField;
         if(geometryFields.isEmpty()) {
@@ -251,12 +258,12 @@ public class NoiseMapByReceiverMaker extends GridMapMaker {
             }
         }
         // Iterate over receivers and look for intersecting cells
-        try (SpatialResultSet srs = rs.unwrap(SpatialResultSet.class)) {
-            while (srs.next()) {
-                Geometry pt = srs.getGeometry();
+        try {
+            while (rs.next()) {
+                Geometry pt = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(rs, geometryField, dbType);
                 if(pt != null && !pt.isEmpty()) {
                     Coordinate ptCoord = pt.getCoordinate();
-                    List queryResult = rtree.query(new Envelope(ptCoord));
+                    List<?> queryResult = rtree.query(new Envelope(ptCoord));
                     for(Object o : queryResult) {
                         if(o instanceof CellIndex) {
                             cellIndices.merge((CellIndex) o, 1, Integer::sum);
@@ -264,6 +271,8 @@ public class NoiseMapByReceiverMaker extends GridMapMaker {
                     }
                 }
             }
+        } finally {
+            rs.close();
         }
         return cellIndices;
     }
@@ -328,6 +337,18 @@ public class NoiseMapByReceiverMaker extends GridMapMaker {
     @Override
     public void initialize(Connection connection, ProgressVisitor progression) throws SQLException {
         super.initialize(connection, progression);
+
+        // Ensure geometry factory carries a valid SRID; PostGIS tables created without explicit SRID
+        // may return 0 for sources/buildings, but receivers table should expose the correct value.
+        if (geometryFactory == null || geometryFactory.getSRID() <= 0) {
+            DBTypes dbType = DBUtils.getDBType(GeometrySqlHelper.resolveConnection(connection));
+            int receiverSrid = GeometrySqlHelper.getTableSRID(connection, TableLocation.parse(receiverTableName, dbType));
+            if (receiverSrid > 0) {
+                PrecisionModel precisionModel = geometryFactory != null ? geometryFactory.getPrecisionModel() : new PrecisionModel();
+                CoordinateSequenceFactory csFactory = geometryFactory != null ? geometryFactory.getCoordinateSequenceFactory() : null;
+                geometryFactory = new GeometryFactory(precisionModel, receiverSrid, csFactory);
+            }
+        }
         tableLoader.initialize(connection, this);
         computeRaysOutFactory.initialize(connection, this);
     }

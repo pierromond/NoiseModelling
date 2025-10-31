@@ -19,6 +19,8 @@ package org.noise_planet.noisemodelling.scripts.Database_Manager
 
 import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.TableLocation
+import org.h2gis.utilities.dbtypes.DBTypes
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -70,17 +72,33 @@ def exec(Connection connection, input) {
         // Build the result string with every tables
         StringBuilder sb = new StringBuilder()
 
+        // Get schema name based on database type
+        DBTypes dbType = DatabaseHelper.getDBType(connection)
+        String schemaName
+        if (dbType == DBTypes.POSTGRESQL) {
+            // Get current schema for PostgreSQL
+            def stmt = connection.createStatement()
+            def rs = stmt.executeQuery("SELECT current_schema()")
+            schemaName = rs.next() ? rs.getString(1) : "public"
+            rs.close()
+            stmt.close()
+        } else {
+            schemaName = "PUBLIC"
+        }
+
         // Get every table names
-        List<String> tables = JDBCUtilities.getTableNames(connection, null, "PUBLIC", "%", null)
+        List<String> tables = JDBCUtilities.getTableNames(connection, null, schemaName, "%", ["TABLE"] as String[])
         // Loop over the tables
         tables.each { t ->
-            TableLocation tab = TableLocation.parse(t)
-            if (!ignorelst.contains(tab.getTable())) {
+            TableLocation tab = TableLocation.parse(t, dbType)
+            String tableName = tab.getTable()
+            if (!ignorelst.contains(tableName.toUpperCase())) {
                 // Add the name of the table in the string builder
                 if (sb.size() > 0) {
                     sb.append(" || ")
                 }
-                sb.append(tab.getTable())
+                // Remove quotes from table name for display
+                sb.append(tableName.replaceAll('"', ''))
 
                 // Create a connection statement to interact with the database in SQL
                 Statement stmt = connection.createStatement()

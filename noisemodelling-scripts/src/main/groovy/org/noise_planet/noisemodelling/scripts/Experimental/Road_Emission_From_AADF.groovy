@@ -15,6 +15,7 @@ import org.locationtech.jts.geom.Geometry
 import org.noise_planet.noisemodelling.emission.road.cnossos.RoadCnossos
 import org.noise_planet.noisemodelling.emission.road.cnossos.RoadCnossosParameters
 import org.noise_planet.noisemodelling.pathfinder.path.Scene
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 
 import java.sql.Connection
 import java.sql.PreparedStatement
@@ -44,7 +45,6 @@ def exec(Connection connection, input) {
     if (input['sourcesTableName']) {
         sources_table_name = input['sourcesTableName']
     }
-    sources_table_name = sources_table_name.toUpperCase()
 
     // ----------------------------------
     // Start...
@@ -55,7 +55,7 @@ def exec(Connection connection, input) {
     connection = new ConnectionWrapper(connection)
 
     //Get the geometry field of the source table
-    TableLocation sourceTableIdentifier = TableLocation.parse(sources_table_name)
+    TableLocation sourceTableIdentifier = TableLocation.parse(DatabaseHelper.normalizeTableNameForUtilities(connection, sources_table_name))
     List<String> geomFields = GeometryTableUtilities.getGeometryColumnNames(connection, sourceTableIdentifier)
     if(geomFields.isEmpty()) {
         output = String.format("The table %s does not exists or does not contain a geometry field", sourceTableIdentifier)

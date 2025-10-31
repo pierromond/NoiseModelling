@@ -39,15 +39,10 @@ class MainHttpTest {
      */
     private static final int PORT = 8000;
     /**
-     * The base URL for the OWS (OGC Web Services) endpoints used in the test cases.
-     * It dynamically constructs the URL using the `localhost` domain and the value
-     * of the `PORT` variable defined in the class.
-     *
-     * This URL serves as the base endpoint for various HTTP requests made during
-     * the execution of the test suite and is primarily used for testing capabilities,
-     * descriptions, and process execution of the WPS (Web Processing Service).
+     * The base URL used during HTTP-based tests. We initialize it with the localhost
+     * scheme and complete the exact port after the embedded server starts.
      */
-    private static final String BASE_URL = "http://localhost:" + PORT + "/ows";
+    private static String BASE_URL = "http://localhost:";
 
     /**
      * Sets up the test environment for the HTTP-based tests.
@@ -62,6 +57,7 @@ class MainHttpTest {
     @BeforeAll
     public static void setUp() throws IOException {
         app = Main.startServer(false);
+        BASE_URL = "http://localhost:" + app.port() + "/ows";
     }
 
     /**

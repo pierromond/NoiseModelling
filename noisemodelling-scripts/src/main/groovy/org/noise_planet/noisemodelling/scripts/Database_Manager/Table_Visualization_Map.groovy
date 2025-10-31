@@ -21,10 +21,14 @@ package org.noise_planet.noisemodelling.scripts.Database_Manager
 import org.h2gis.utilities.GeometryMetaData
 import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.JDBCUtilities
+import org.h2gis.utilities.SpatialResultSet
 import org.h2gis.utilities.TableLocation
 import org.h2gis.utilities.dbtypes.DBUtils
+import org.h2gis.utilities.dbtypes.DBTypes
 import org.locationtech.jts.geom.Geometry
+import org.locationtech.jts.io.WKBReader
 import org.locationtech.jts.io.WKTWriter
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -81,10 +85,8 @@ def exec(Connection connection, input) {
     logger.info('Start : Display a table on a map')
     logger.info("inputs {}", input) // log inputs of the run
 
-    // Get name of the table
+    // Get name of the table (use as-is - databases handle case naturally)
     String tableName = input["tableName"] as String
-    // do it case-insensitive
-    tableName = tableName.toUpperCase()
 
     // Default SRID (WGS84)
     Integer srid = 4326
@@ -93,8 +95,11 @@ def exec(Connection connection, input) {
         srid = input['inputSRID'] as Integer
     }
 
+    // Normalize for H2GIS utility method calls
+    String tableName_for_utils = DatabaseHelper.normalizeTableNameForUtilities(connection, tableName)
+
     // Read Geometry Index and type of the table
-    List<String> spatialFieldNames = GeometryTableUtilities.getGeometryColumnNames(connection, TableLocation.parse(tableName, DBUtils.getDBType(connection)))
+    List<String> spatialFieldNames = DatabaseHelper.getGeometryColumns(connection, tableName_for_utils)
 
     // If the table does not contain a geometry field
     if (spatialFieldNames.isEmpty()) {
@@ -102,7 +107,7 @@ def exec(Connection connection, input) {
     }
 
     // Get the SRID of the table
-    Integer tableSrid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(tableName))
+    Integer tableSrid = DatabaseHelper.getTableSRID(connection, tableName, spatialFieldNames.get(0))
 
     if (tableSrid != 0 && tableSrid != srid && input['inputSRID']) throw new Exception("The table already has a different SRID than the one you gave.")
 
@@ -113,19 +118,50 @@ def exec(Connection connection, input) {
     logger.info("The actual SRID of the table is " + srid)
 
     if (tableSrid == 0) {
-        GeometryMetaData metaData = GeometryTableUtilities.getMetaData(connection, TableLocation.parse(tableName, DBUtils.getDBType(connection)), spatialFieldNames.get(0));
-        metaData.setSRID(srid);
-        connection.createStatement().execute(String.format("ALTER TABLE %s ALTER COLUMN %s %s USING ST_SetSRID(%s,%d)",
-                TableLocation.parse(tableName, DBUtils.getDBType(connection)), spatialFieldNames.get(0), metaData.getSQL(), spatialFieldNames.get(0),spatialFieldNames.get(0) ,srid))
+        if (DatabaseHelper.isPostgreSQL(connection)) {
+            DatabaseHelper.ensureSRID(connection, tableName, spatialFieldNames.get(0), srid)
+            tableSrid = srid
+        } else {
+            GeometryMetaData metaData = GeometryTableUtilities.getMetaData(connection, TableLocation.parse(tableName, DBUtils.getDBType(connection)), spatialFieldNames.get(0))
+            if (metaData != null) {
+                metaData.setSRID(srid)
+                connection.createStatement().execute(String.format("ALTER TABLE %s ALTER COLUMN %s %s USING ST_SetSRID(%s,%d)",
+                        TableLocation.parse(tableName, DBUtils.getDBType(connection)), spatialFieldNames.get(0), metaData.getSQL(), spatialFieldNames.get(0), srid))
+            }
+        }
     }
 
     // Project geometry in WGS84 (EPSG:4326) and groups all the geometries of the table
-    String geomField = "ST_ACCUM(ST_TRANSFORM(" + spatialFieldNames.get(0) + " ,4326))"
-    ResultSet rs = stmt.executeQuery(String.format("select %s " + spatialFieldNames.get(0) + " from %s", geomField, tableName))
-
-    // Get the geometry field from the table
-    while (rs.next()) {
-        geom = (Geometry) rs.getObject(1)
+    // Use ST_ACCUM for H2GIS, ST_Collect for PostgreSQL
+    DBTypes dbType = DatabaseHelper.getDBType(connection)
+    String accumFunc = (dbType == DBTypes.POSTGRESQL) ? "ST_Collect" : "ST_ACCUM"
+    String geomExpr = accumFunc + "(ST_TRANSFORM(" + spatialFieldNames.get(0) + " ,4326))"
+    String selectSql
+    if (DatabaseHelper.isPostgreSQL(connection)) {
+        selectSql = String.format("SELECT ST_AsBinary(%s) AS geom FROM %s", geomExpr, tableName)
+        ResultSet rs = stmt.executeQuery(selectSql)
+        try {
+            if (rs.next()) {
+                byte[] wkb = rs.getBytes("geom")
+                if (wkb != null) {
+                    geom = new WKBReader().read(wkb)
+                    geom?.setSRID(4326)
+                }
+            }
+        } finally {
+            rs.close()
+        }
+    } else {
+        // H2GIS: use getObject to avoid unwrap() issues
+        selectSql = String.format("SELECT %s AS geom FROM %s", geomExpr, tableName)
+        ResultSet rs = stmt.executeQuery(selectSql)
+        try {
+            if (rs.next()) {
+                geom = rs.getObject("geom") as Geometry
+            }
+        } finally {
+            rs.close()
+        }
     }
 
     // print to command window

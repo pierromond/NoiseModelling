@@ -182,6 +182,25 @@
             <version>1.7.36</version>
             <scope>test</scope>
         </dependency>
+        <!-- Testcontainers for PostgreSQL testing -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>1.19.3</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>1.19.3</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>1.19.3</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
     <build>
         <plugins>
@@ -218,6 +237,51 @@
                         </testSource>
                     </testSources>
                 </configuration>
+            </plugin>
+
+            <!-- Update Surefire plugin for JUnit 5 support -->
+            <!-- Run tests twice: once with H2GIS, once with PostgreSQL via Testcontainers -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>2.22.2</version>
+                <configuration>
+                    <!-- Disable default test execution (we have custom executions below) -->
+                    <skip>true</skip>
+                </configuration>
+                <executions>
+                    <!-- First execution: H2GIS (default, fast in-memory) -->
+                    <execution>
+                        <id>test-h2gis</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <skip>false</skip>
+                            <environmentVariables>
+                                <TEST_USE_POSTGIS>false</TEST_USE_POSTGIS>
+                                <TEST_USE_TESTCONTAINERS>false</TEST_USE_TESTCONTAINERS>
+                            </environmentVariables>
+                            <reportNameSuffix>h2gis</reportNameSuffix>
+                        </configuration>
+                    </execution>
+                    
+                    <!-- Second execution: PostgreSQL via Testcontainers (cross-database validation) -->
+                    <execution>
+                        <id>test-postgresql</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <skip>false</skip>
+                            <environmentVariables>
+                                <TEST_USE_POSTGIS>true</TEST_USE_POSTGIS>
+                                <TEST_USE_TESTCONTAINERS>true</TEST_USE_TESTCONTAINERS>
+                            </environmentVariables>
+                            <reportNameSuffix>postgresql</reportNameSuffix>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
 
             <plugin>

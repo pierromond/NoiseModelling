@@ -27,6 +27,7 @@ import org.h2gis.api.ProgressVisitor
 import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.TableLocation
 import org.noise_planet.noisemodelling.pathfinder.utils.profiler.RootProgressVisitor
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -201,6 +202,9 @@ def exec(Connection connection, input) {
 
     def sql = new Sql(connection)
 
+    // PostgreSQL uses SERIAL, H2GIS uses AUTO_INCREMENT
+    String autoIncrementSyntax = DatabaseHelper.isPostgreSQL(connection) ? "SERIAL" : "INT AUTO_INCREMENT"
+
     def import_roads = """
     ------------
     -- Import roads
@@ -209,8 +213,7 @@ def exec(Connection connection, input) {
     DROP TABLE IF EXISTS dem_roads;
     CREATE TABLE dem_roads AS SELECT THE_GEOM, 'ROAD' as SOURCE, (CASE WHEN $roadWidth IS NOT NULL AND $roadWidth>3 THEN $roadWidth/2 ELSE 1.5 END) as WIDTH 
         FROM $inputRoad WHERE st_zmin(THE_GEOM) > 0;
-    CREATE SPATIAL INDEX ON dem_roads(THE_GEOM);
-    ALTER TABLE dem_roads ADD PK_LINE INT AUTO_INCREMENT NOT NULL;
+    ALTER TABLE dem_roads ADD PK_LINE $autoIncrementSyntax NOT NULL;
     ALTER TABLE dem_roads add primary key(PK_LINE);
     
     -- Roads: layer $inputRoad imported
@@ -220,7 +223,7 @@ def exec(Connection connection, input) {
     ------------
     -- Insert roads platform into $enrichedDEM
 
-    DROP TABLE DEM_WITHOUT_PTLINE IF EXISTS;
+    DROP TABLE IF EXISTS DEM_WITHOUT_PTLINE;
     CREATE TABLE DEM_WITHOUT_PTLINE(THE_GEOM geometry(POINTZ, $srid), source varchar) AS SELECT st_setsrid(THE_GEOM, $srid), 'DEM' FROM $inputDEM;
     -- Remove DEM points that are less than $roadWidth far FROM roads
     DELETE FROM DEM_WITHOUT_PTLINE WHERE EXISTS (SELECT 1 FROM dem_roads b 
@@ -242,8 +245,6 @@ def exec(Connection connection, input) {
     
     DROP TABLE IF EXISTS $enrichedDEM;
     ALTER TABLE DEM_WITHOUT_PTLINE RENAME TO $enrichedDEM;
-    -- Create a spatial index on $enrichedDEM
-    CREATE SPATIAL INDEX ON $enrichedDEM (THE_GEOM);
 
     ----------------------------------
     -- Remove non needed tables
@@ -257,13 +258,25 @@ def exec(Connection connection, input) {
     // print to command window
     def engine = new SimpleTemplateEngine()
 
+    // Execute import_roads and create spatial index
+    def binding = ["inputDEM": inputDEM, "inputRoad": inputRoad, "roadWidth": roadWidth, "outputSuffix": outputSuffix, "srid": srid, "hRoad": hRoad, "autoIncrementSyntax": autoIncrementSyntax]
     stringBuilder.append(import_roads)
-    stringBuilder.append(enrich_roads)
-    stringBuilder.append(enrich_final)
-
-    def binding = ["inputDEM": inputDEM, "inputRoad": inputRoad, "roadWidth": roadWidth, "outputSuffix": outputSuffix, "srid": srid, "hRoad": hRoad]
     def template = engine.createTemplate(stringBuilder.toString()).make(binding)
     parseScript(template.toString(), sql, progress, logger)
+    DatabaseHelper.createSpatialIndex(connection, "dem_roads", "THE_GEOM")
+    
+    // Execute enrich_roads
+    stringBuilder = new StringBuilder()
+    stringBuilder.append(enrich_roads)
+    template = engine.createTemplate(stringBuilder.toString()).make(binding)
+    parseScript(template.toString(), sql, progress, logger)
+    
+    // Execute enrich_final and create spatial index
+    stringBuilder = new StringBuilder()
+    stringBuilder.append(enrich_final)
+    template = engine.createTemplate(stringBuilder.toString()).make(binding)
+    parseScript(template.toString(), sql, progress, logger)
+    DatabaseHelper.createSpatialIndex(connection, enrichedDEM, "THE_GEOM")
 
     return "DEM successfully enriched in the table " + enrichedDEM
 }

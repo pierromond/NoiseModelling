@@ -9,6 +9,7 @@
 package org.noise_planet.noisemodelling.jdbc.input;
 
 import org.h2gis.utilities.SpatialResultSet;
+import org.h2gis.utilities.dbtypes.DBTypes;
 import org.locationtech.jts.geom.Geometry;
 import org.noise_planet.noisemodelling.jdbc.EmissionTableGenerator;
 import org.noise_planet.noisemodelling.pathfinder.profilebuilder.ProfileBuilder;
@@ -18,8 +19,6 @@ import org.noise_planet.noisemodelling.propagation.SceneWithAttenuation;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
-
-import static org.noise_planet.noisemodelling.pathfinder.utils.AcousticIndicatorsFunctions.sumArray;
 
 /**
  * Add emission information for each source in the computation scene
@@ -33,6 +32,7 @@ public class SceneWithEmission extends SceneWithAttenuation {
     public Map<Long, ArrayList<PeriodEmission>> wjSources = new HashMap<>();
 
     public SceneDatabaseInputSettings sceneDatabaseInputSettings = new SceneDatabaseInputSettings();
+    private DBTypes dbType;
 
     public SceneWithEmission(ProfileBuilder profileBuilder, SceneDatabaseInputSettings sceneDatabaseInputSettings) {
         super(profileBuilder);
@@ -48,7 +48,7 @@ public class SceneWithEmission extends SceneWithAttenuation {
 
     public void processTrafficFlowDEN(Long pk, SpatialResultSet rs) throws SQLException {
         // Source table PK, GEOM, LV_D, LV_E, LV_N ...
-        double[][] lw = EmissionTableGenerator.computeLw(rs, sceneDatabaseInputSettings.coefficientVersion, sourceFieldNames);
+        double[][] lw = EmissionTableGenerator.computeLw(rs, sceneDatabaseInputSettings.coefficientVersion, sourceFieldNames, dbType);
         // Will generate D E N emission
         for (EmissionTableGenerator.STANDARD_PERIOD period : EmissionTableGenerator.STANDARD_PERIOD.values()) {
             addSourceEmission(pk, EmissionTableGenerator.STANDARD_PERIOD_VALUE[period.ordinal()], lw[period.ordinal()]);
@@ -103,6 +103,8 @@ public class SceneWithEmission extends SceneWithAttenuation {
             case INPUT_MODE_LW_DEN:
                 processEmissionDEN(pk, rs);
                 break;
+            default:
+                break;
         }
     }
 
@@ -137,6 +139,8 @@ public class SceneWithEmission extends SceneWithAttenuation {
             case INPUT_MODE_LW:
                 processEmission(pk, rs);
                 break;
+            default:
+                break;
         }
     }
 
@@ -165,6 +169,14 @@ public class SceneWithEmission extends SceneWithAttenuation {
         super.clearSources();
         sourceEmissionFieldsCache.clear();
         wjSources.clear();
+    }
+
+    public void setDbType(DBTypes dbType) {
+        this.dbType = dbType;
+    }
+
+    public DBTypes getDbType() {
+        return dbType;
     }
 
     public static class PeriodEmission {

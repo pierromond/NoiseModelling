@@ -21,6 +21,7 @@ import org.locationtech.jts.operation.buffer.BufferOp;
 import org.locationtech.jts.operation.buffer.BufferParameters;
 import org.locationtech.jts.simplify.TopologyPreservingSimplifier;
 import org.noise_planet.noisemodelling.jdbc.input.DefaultTableLoader;
+import org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper;
 import org.noise_planet.noisemodelling.pathfinder.delaunay.Triangle;
 import org.noise_planet.noisemodelling.pathfinder.delaunay.LayerDelaunay;
 import org.noise_planet.noisemodelling.pathfinder.delaunay.LayerDelaunayError;
@@ -337,13 +338,28 @@ public class DelaunayReceiversMaker extends GridMapMaker {
     @Override
     protected Envelope getComputationEnvelope(Connection connection) throws SQLException {
         Envelope computationEnvelope = new Envelope();
-        DBTypes dbTypes = DBUtils.getDBType(connection);
+        DBTypes wrapperDbType = DBUtils.getDBType(connection);
+        Connection baseConnection = connection;
+        try {
+            Connection unwrapped = connection.unwrap(Connection.class);
+            if (unwrapped != null) {
+                baseConnection = unwrapped;
+            }
+        } catch (SQLException ignored) {
+            // Keep original connection if unwrap is not supported
+        }
         if(!sourcesTableName.isEmpty() && JDBCUtilities.getRowCount(connection, sourcesTableName) > 0) {
-            computationEnvelope.expandToInclude(GeometryTableUtilities.getEnvelope(connection, TableLocation.parse(sourcesTableName, dbTypes)).getEnvelopeInternal());
+            Envelope sourceEnvelope = GeometrySqlHelper.getTableEnvelope(baseConnection, TableLocation.parse(sourcesTableName, wrapperDbType));
+            if (sourceEnvelope != null) {
+                computationEnvelope.expandToInclude(sourceEnvelope);
+            }
         }
         if(!buildingTableParameters.buildingsTableName.isEmpty() && JDBCUtilities.getRowCount(connection, buildingTableParameters.buildingsTableName) > 0) {
-            computationEnvelope.expandToInclude(GeometryTableUtilities.getEnvelope(connection,
-                    TableLocation.parse(buildingTableParameters.buildingsTableName, dbTypes)).getEnvelopeInternal());
+            Envelope buildingEnvelope = GeometrySqlHelper.getTableEnvelope(baseConnection,
+                    TableLocation.parse(buildingTableParameters.buildingsTableName, wrapperDbType));
+            if (buildingEnvelope != null) {
+                computationEnvelope.expandToInclude(buildingEnvelope);
+            }
         }
         return computationEnvelope;
     }
@@ -365,52 +381,96 @@ public class DelaunayReceiversMaker extends GridMapMaker {
                                            GeometryFactory geometryFactory, List<Triangle> triangles, int cellI,
                                            int cellJ, int gridDim) throws SQLException {
 
+        DBTypes dbType = GeometrySqlHelper.resolveDbType(connection);
+        boolean isPostgreSQL = GeometrySqlHelper.isPostgreSQL(dbType);
+        String receiverGeomColumn = isPostgreSQL ? "the_geom" : "THE_GEOM";
+        String trianglesGeomColumn = receiverGeomColumn;
+        String receiverPkColumn = isPostgreSQL ? "pk" : "PK";
+        String trianglesPkColumn = receiverPkColumn;
+        String receiverTableSql = TableLocation.parse(receiverTableName, dbType).toString();
+        String trianglesTableSql = TableLocation.parse(trianglesTableName, dbType).toString();
+        int srid = geometryFactory.getSRID();
+
         if(!JDBCUtilities.tableExists(connection, receiverTableName)) {
-            Statement st = connection.createStatement();
-            st.execute("CREATE TABLE "+TableLocation.parse(receiverTableName)+"(pk serial NOT NULL, the_geom geometry not null, PRIMARY KEY (PK))");
+            try (Statement st = connection.createStatement()) {
+                if (isPostgreSQL) {
+                    st.execute("CREATE TABLE IF NOT EXISTS " + receiverTableSql + "(" + receiverPkColumn + " SERIAL PRIMARY KEY, "
+                            + receiverGeomColumn + " geometry(PointZ, " + srid + ") NOT NULL)");
+                } else {
+                    st.execute("CREATE TABLE " + receiverTableSql + "(" + receiverPkColumn + " INT AUTO_INCREMENT PRIMARY KEY, "
+                            + receiverGeomColumn + " GEOMETRY NOT NULL)");
+                }
+            }
         }
         if(!JDBCUtilities.tableExists(connection, trianglesTableName)) {
-            Statement st = connection.createStatement();
-            st.execute("CREATE TABLE "+TableLocation.parse(trianglesTableName)+"(pk serial NOT NULL, the_geom geometry , PK_1 integer not null, PK_2 integer not null, PK_3 integer not null, cell_id integer not null, PRIMARY KEY (PK))");
+            try (Statement st = connection.createStatement()) {
+                if (isPostgreSQL) {
+                    st.execute("CREATE TABLE IF NOT EXISTS " + trianglesTableSql + "(" + trianglesPkColumn + " SERIAL PRIMARY KEY, "
+                            + trianglesGeomColumn + " geometry(PolygonZ, " + srid + "), PK_1 integer not null, PK_2 integer not null, PK_3 integer not null, CELL_ID integer not null)");
+                } else {
+                    st.execute("CREATE TABLE " + trianglesTableSql + "(" + trianglesPkColumn + " INT AUTO_INCREMENT PRIMARY KEY, "
+                            + trianglesGeomColumn + " GEOMETRY, PK_1 integer not null, PK_2 integer not null, PK_3 integer not null, CELL_ID integer not null)");
+                }
+            }
         }
         int receiverPkOffset = receiverPK.get();
         // Add vertices to receivers
-        PreparedStatement ps = connection.prepareStatement("INSERT INTO "+TableLocation.parse(receiverTableName)+" VALUES (?, ?);");
-        int batchSize = 0;
-        for(Coordinate v : vertices) {
-            ps.setInt(1, receiverPK.getAndAdd(1));
-            ps.setObject(2, geometryFactory.createPoint(v));
-            ps.addBatch();
-            batchSize++;
-            if (batchSize >= BATCH_MAX_SIZE) {
+        String receiverInsertSql = "INSERT INTO " + receiverTableSql + "(" + receiverPkColumn + ", " + receiverGeomColumn + ") VALUES (?, " + GeometrySqlHelper.geometryInsertExpression(dbType) + ")";
+        try (PreparedStatement ps = connection.prepareStatement(receiverInsertSql)) {
+            int batchSize = 0;
+            for(Coordinate v : vertices) {
+                Geometry point = geometryFactory.createPoint(v);
+                int paramIndex = 1;
+                ps.setInt(paramIndex++, receiverPK.getAndAdd(1));
+                paramIndex = GeometrySqlHelper.setGeometryParameter(ps, paramIndex, point, dbType);
+                ps.addBatch();
+                batchSize++;
+                if (batchSize >= BATCH_MAX_SIZE) {
+                    ps.executeBatch();
+                    ps.clearBatch();
+                    batchSize = 0;
+                }
+            }
+            if (batchSize > 0) {
                 ps.executeBatch();
-                ps.clearBatch();
-                batchSize = 0;
             }
         }
-        if (batchSize > 0) {
-            ps.executeBatch();
+        // Ensure SRID is set for PostgreSQL (some versions might not preserve it from ST_SetSRID in batches)
+        if (isPostgreSQL && srid > 0) {
+            try (Statement st = connection.createStatement()) {
+                st.execute("UPDATE " + receiverTableSql + " SET " + receiverGeomColumn + " = ST_SetSRID(" + receiverGeomColumn + ", " + srid + ")");
+            }
         }
         // Add triangles
-        ps = connection.prepareStatement("INSERT INTO "+TableLocation.parse(trianglesTableName)+"(the_geom, PK_1, PK_2, PK_3, CELL_ID) VALUES (?, ?, ?, ?, ?);");
-        batchSize = 0;
-        for(Triangle t : triangles) {
-            ps.setObject(1, geometryFactory.createPolygon(new Coordinate[]{vertices.get(t.getA()),
-                    vertices.get(t.getB()), vertices.get(t.getC()), vertices.get(t.getA())}));
-            ps.setInt(2, t.getA() + receiverPkOffset);
-            ps.setInt(3, t.getC() + receiverPkOffset);
-            ps.setInt(4, t.getB() + receiverPkOffset);
-            ps.setInt(5, cellI * gridDim + cellJ);
-            ps.addBatch();
-            batchSize++;
-            if (batchSize >= BATCH_MAX_SIZE) {
+        String triangleInsertSql = "INSERT INTO " + trianglesTableSql + "(" + trianglesGeomColumn + ", PK_1, PK_2, PK_3, CELL_ID) VALUES ("
+                + GeometrySqlHelper.geometryInsertExpression(dbType) + ", ?, ?, ?, ?)";
+        try (PreparedStatement ps = connection.prepareStatement(triangleInsertSql)) {
+            int batchSize = 0;
+            for(Triangle t : triangles) {
+                Geometry polygon = geometryFactory.createPolygon(new Coordinate[]{vertices.get(t.getA()),
+                        vertices.get(t.getB()), vertices.get(t.getC()), vertices.get(t.getA())});
+                int paramIndex = GeometrySqlHelper.setGeometryParameter(ps, 1, polygon, dbType);
+                ps.setInt(paramIndex++, t.getA() + receiverPkOffset);
+                ps.setInt(paramIndex++, t.getC() + receiverPkOffset);
+                ps.setInt(paramIndex++, t.getB() + receiverPkOffset);
+                ps.setInt(paramIndex, cellI * gridDim + cellJ);
+                ps.addBatch();
+                batchSize++;
+                if (batchSize >= BATCH_MAX_SIZE) {
+                    ps.executeBatch();
+                    ps.clearBatch();
+                    batchSize = 0;
+                }
+            }
+            if (batchSize > 0) {
                 ps.executeBatch();
-                ps.clearBatch();
-                batchSize = 0;
             }
         }
-        if (batchSize > 0) {
-            ps.executeBatch();
+        // Ensure SRID is set for PostgreSQL (some versions might not preserve it from ST_SetSRID in batches)
+        if (isPostgreSQL && srid > 0) {
+            try (Statement st = connection.createStatement()) {
+                st.execute("UPDATE " + trianglesTableSql + " SET " + trianglesGeomColumn + " = ST_SetSRID(" + trianglesGeomColumn + ", " + srid + ")");
+            }
         }
     }
 
@@ -434,23 +494,30 @@ public class DelaunayReceiversMaker extends GridMapMaker {
     public void fetchCellSource(Connection connection, Envelope fetchEnvelope, boolean doIntersection, List<Geometry> sourceGeometries)
             throws SQLException {
 
-        DBTypes dbType = DBUtils.getDBType(connection.unwrap(Connection.class));
-        TableLocation sourceTableIdentifier = TableLocation.parse(sourcesTableName, dbType);
+        DBTypes wrappedDbType = DBUtils.getDBType(connection);
+        Connection baseConnection = GeometrySqlHelper.resolveConnection(connection);
+        DBTypes dbType = GeometrySqlHelper.resolveDbType(connection);
+        TableLocation sourceTableIdentifier = TableLocation.parse(sourcesTableName, wrappedDbType);
+        TableLocation baseTableLocation = TableLocation.parse(sourcesTableName, dbType);
         List<String> geomFields = getGeometryColumnNames(connection, sourceTableIdentifier);
         if (geomFields.isEmpty()) {
             throw new SQLException(String.format("The table %s does not exists or does not contain a geometry field", sourceTableIdentifier));
         }
         String sourceGeomName = geomFields.get(0);
         Geometry domainConstraint = geometryFactory.toGeometry(fetchEnvelope);
-        Tuple<String, Integer> primaryKey = JDBCUtilities.getIntegerPrimaryKeyNameAndIndex(
-                connection.unwrap(Connection.class), new TableLocation(sourcesTableName, dbType));
+        Tuple<String, Integer> primaryKey = GeometrySqlHelper.getIntegerPrimaryKey(baseConnection, baseTableLocation);
+        if (primaryKey == null) {
+            throw new SQLException(String.format("Unable to determine primary key for table %s", baseTableLocation));
+        }
         int pkIndex = primaryKey.second();
         if (pkIndex < 1) {
             throw new IllegalArgumentException(String.format("Source table %s does not contain a primary key", sourceTableIdentifier));
         }
-        try (PreparedStatement st = connection.prepareStatement("SELECT * FROM " + sourcesTableName + " WHERE "
-                + TableLocation.quoteIdentifier(sourceGeomName) + " && ?::geometry")) {
-            st.setObject(1, geometryFactory.toGeometry(fetchEnvelope));
+        Geometry envelopeGeometry = geometryFactory.toGeometry(fetchEnvelope);
+        String envelopePredicate = GeometrySqlHelper.buildEnvelopePredicate(connection, TableLocation.quoteIdentifier(sourceGeomName, dbType));
+        try (PreparedStatement st = connection.prepareStatement("SELECT * FROM " + sourceTableIdentifier.toString() + " WHERE "
+                + envelopePredicate)) {
+            GeometrySqlHelper.setGeometryParameter(st, 1, envelopeGeometry, dbType);
             st.setFetchSize(DefaultTableLoader.DEFAULT_FETCH_SIZE);
             boolean autoCommit = connection.getAutoCommit();
             if (autoCommit) {
@@ -459,7 +526,7 @@ public class DelaunayReceiversMaker extends GridMapMaker {
             st.setFetchDirection(ResultSet.FETCH_FORWARD);
             try (SpatialResultSet rs = st.executeQuery().unwrap(SpatialResultSet.class)) {
                 while (rs.next()) {
-                    Geometry geo = rs.getGeometry();
+                    Geometry geo = GeometrySqlHelper.getGeometry(rs, sourceGeomName, dbType);
                     if (geo != null) {
                         if (doIntersection) {
                             geo = domainConstraint.intersection(geo);
