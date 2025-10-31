@@ -212,11 +212,7 @@ def exec(Connection connection, input) {
         }
         stmt.execute("ALTER TABLE " + tableNameTraj + " ADD PRIMARY KEY (PK);  ")
     } else {
-        if (DatabaseHelper.isPostgreSQL(connection)) {
-            stmt.execute("ALTER TABLE " + tableNameTraj + " ADD COLUMN PK SERIAL PRIMARY KEY;")
-        } else {
-            stmt.execute("ALTER TABLE " + tableNameTraj + " ADD PK INT AUTO_INCREMENT PRIMARY KEY;")
-        }
+        DatabaseHelper.addAutoIncrementPrimaryKey(connection, tableNameTraj, DatabaseHelper.normalizeColumnName(connection, 'PK'))
     }
 
     resultString = "The table " + tableNameTraj + " has been uploaded to database!"

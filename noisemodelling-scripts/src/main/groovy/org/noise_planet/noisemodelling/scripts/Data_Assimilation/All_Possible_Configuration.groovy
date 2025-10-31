@@ -4,6 +4,7 @@ import groovy.sql.BatchingPreparedStatementWrapper
 import groovy.sql.Sql
 import groovy.transform.CompileStatic
 import org.h2gis.utilities.wrapper.ConnectionWrapper
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -82,10 +83,28 @@ def exec(Connection connection,input) {
 def getAllConfig(Connection connection,double[] vals,double[] temps) {
     Sql sql = new Sql(connection)
 
-    sql.execute("DROP TABLE ALL_CONFIGURATIONS IF EXISTS")
-    sql.execute("CREATE TABLE ALL_CONFIGURATIONS(IT INTEGER PRIMARY KEY AUTO_INCREMENT,PRIMARY_VAL FLOAT,SECONDARY_VAL FLOAT,TERTIARY_VAL FLOAT,OTHERS_VAL FLOAT,TEMP_VAL double)")
+    String tableName = DatabaseHelper.normalizeTableName(connection, 'ALL_CONFIGURATIONS')
+    String primaryValCol = DatabaseHelper.normalizeColumnName(connection, 'PRIMARY_VAL')
+    String secondaryValCol = DatabaseHelper.normalizeColumnName(connection, 'SECONDARY_VAL')
+    String tertiaryValCol = DatabaseHelper.normalizeColumnName(connection, 'TERTIARY_VAL')
+    String othersValCol = DatabaseHelper.normalizeColumnName(connection, 'OTHERS_VAL')
+    String tempValCol = DatabaseHelper.normalizeColumnName(connection, 'TEMP_VAL')
 
-    String insertQuery = "INSERT INTO ALL_CONFIGURATIONS (PRIMARY_VAL, SECONDARY_VAL, TERTIARY_VAL, OTHERS_VAL, TEMP_VAL) VALUES (?, ?, ?, ?, ?)"
+    DatabaseHelper.dropTableIfExists(connection, tableName)
+    sql.execute("CREATE TABLE " + tableName + "(" +
+            primaryValCol + " FLOAT, " +
+            secondaryValCol + " FLOAT, " +
+            tertiaryValCol + " FLOAT, " +
+            othersValCol + " FLOAT, " +
+            tempValCol + " DOUBLE PRECISION)")
+    DatabaseHelper.addAutoIncrementPrimaryKey(connection, tableName, DatabaseHelper.normalizeColumnName(connection, 'IT'))
+
+    String insertQuery = "INSERT INTO " + tableName + " (" +
+            primaryValCol + ", " +
+            secondaryValCol + ", " +
+            tertiaryValCol + ", " +
+            othersValCol + ", " +
+            tempValCol + ") VALUES (?, ?, ?, ?, ?)"
     int totalCombinations = vals.length * vals.length * vals.length * vals.length * temps.length
 
     sql.withBatch(100, insertQuery) { BatchingPreparedStatementWrapper ps ->

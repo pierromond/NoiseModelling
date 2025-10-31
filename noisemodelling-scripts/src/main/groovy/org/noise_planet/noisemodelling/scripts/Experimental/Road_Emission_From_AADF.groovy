@@ -73,23 +73,24 @@ def exec(Connection connection, input) {
     Sql sql = new Sql(connection)
 
     // create empty LW_ROADS
-    sql.execute("drop table if exists LW_ROADS;")
-    sql.execute("create table LW_ROADS (IDSOURCE integer, the_geom Geometry, " +
+    String lwRoadsTable = DatabaseHelper.normalizeTableName(connection, 'LW_ROADS')
+    DatabaseHelper.dropTableIfExists(connection, lwRoadsTable)
+    sql.execute("create table " + lwRoadsTable + " (IDSOURCE integer, the_geom Geometry, " +
             "LWD63 double precision, LWD125 double precision, LWD250 double precision, LWD500 double precision, LWD1000 double precision, LWD2000 double precision, LWD4000 double precision, LWD8000 double precision," +
             "LWE63 double precision, LWE125 double precision, LWE250 double precision, LWE500 double precision, LWE1000 double precision, LWE2000 double precision, LWE4000 double precision, LWE8000 double precision," +
             "LWN63 double precision, LWN125 double precision, LWN250 double precision, LWN500 double precision, LWN1000 double precision, LWN2000 double precision, LWN4000 double precision, LWN8000 double precision);")
 
-    def qry = 'INSERT INTO LW_ROADS(IDSOURCE,the_geom, ' +
-            'LWD63, LWD125, LWD250, LWD500, LWD1000,LWD2000, LWD4000, LWD8000,' +
-            'LWE63, LWE125, LWE250, LWE500, LWE1000,LWE2000, LWE4000, LWE8000,' +
-            'LWN63, LWN125, LWN250, LWN500, LWN1000,LWN2000, LWN4000, LWN8000) ' +
-            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);'
+    def qry = """INSERT INTO ${lwRoadsTable}(IDSOURCE,the_geom, """ +
+        'LWD63, LWD125, LWD250, LWD500, LWD1000,LWD2000, LWD4000, LWD8000,' +
+        'LWE63, LWE125, LWE250, LWE500, LWE1000,LWE2000, LWE4000, LWE8000,' +
+        'LWN63, LWN125, LWN250, LWN500, LWN1000,LWN2000, LWN4000, LWN8000) ' +
+        'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);'
 
 
     long start = System.currentTimeMillis()
     // fill the table LW_ROADS
     sql.withBatch(100, qry) { ps ->
-        PreparedStatement st = connection.prepareStatement("SELECT * FROM " + sources_table_name)
+    PreparedStatement st = connection.prepareStatement("SELECT * FROM " + sources_table_name)
         SpatialResultSet rs = st.executeQuery().unwrap(SpatialResultSet.class)
         while (rs.next()) {
             //System.println(rs)
@@ -109,8 +110,8 @@ def exec(Connection connection, input) {
         }
     }
 
-    sql.execute("UPDATE LW_ROADS SET THE_GEOM = ST_UPDATEZ(The_geom,0.05);")
-    sql.execute("ALTER TABLE LW_ROADS ADD pk INT AUTO_INCREMENT PRIMARY KEY;" )
+    sql.execute("UPDATE " + lwRoadsTable + " SET THE_GEOM = ST_UPDATEZ(The_geom,0.05);")
+    DatabaseHelper.addAutoIncrementPrimaryKey(connection, lwRoadsTable, DatabaseHelper.normalizeColumnName(connection, 'PK'))
 
     long computationTime = System.currentTimeMillis() - start;
     output = "The Table LW_ROADS have been created"

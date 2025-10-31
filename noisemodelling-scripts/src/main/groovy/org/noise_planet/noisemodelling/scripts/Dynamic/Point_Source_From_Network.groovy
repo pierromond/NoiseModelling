@@ -22,6 +22,7 @@ import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.TableLocation
 import org.h2gis.utilities.dbtypes.DBUtils
 import org.h2gis.utilities.wrapper.ConnectionWrapper
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -87,27 +88,30 @@ def exec(connection, Map input) {
     }
 
     String roadsTableName = input['tableNetwork']
+    String normalizedRoadsTable = DatabaseHelper.normalizeTableName(connection, roadsTableName)
+    String sourcesPointsTable = DatabaseHelper.normalizeTableName(connection, 'SOURCES_POINTS')
+    String sourcesGeomTable = DatabaseHelper.normalizeTableName(connection, 'SOURCES_GEOM')
 
-    sql.execute("DROP TABLE IF EXISTS SOURCES_POINTS")
-    sql.execute("CREATE TABLE SOURCES_POINTS (ROAD_ID BIGINT, THE_GEOM GEOMETRY);");
-    sql.execute("INSERT INTO SOURCES_POINTS (ROAD_ID, THE_GEOM) SELECT r.PK AS ROAD_ID," +
-            " ST_TOMULTIPOINT(ST_Densify(r.THE_GEOM, "+gridStep+"))AS THE_GEOM FROM "+roadsTableName+" r;");
-    sql.execute("DROP TABLE IF EXISTS SOURCES_GEOM")
-    sql.execute("CREATE TABLE SOURCES_GEOM AS SELECT * FROM ST_EXPLODE('SOURCES_POINTS');");
-    sql.execute("ALTER TABLE SOURCES_GEOM ADD PK INT AUTO_INCREMENT PRIMARY KEY;")
-    sql.execute("DROP TABLE IF EXISTS SOURCES_POINTS")
-    sql.execute("CREATE SPATIAL INDEX ON SOURCES_GEOM(THE_GEOM);")
+    DatabaseHelper.dropTableIfExists(connection, sourcesPointsTable)
+    sql.execute("CREATE TABLE " + sourcesPointsTable + " (ROAD_ID BIGINT, THE_GEOM GEOMETRY);")
+    sql.execute("INSERT INTO " + sourcesPointsTable + " (ROAD_ID, THE_GEOM) SELECT r.PK AS ROAD_ID," +
+            " ST_TOMULTIPOINT(ST_Densify(r.THE_GEOM, " + gridStep + ")) AS THE_GEOM FROM " + normalizedRoadsTable + " r;")
+    DatabaseHelper.dropTableIfExists(connection, sourcesGeomTable)
+    sql.execute("CREATE TABLE " + sourcesGeomTable + " AS SELECT * FROM ST_EXPLODE('" + sourcesPointsTable + "');")
+    DatabaseHelper.addAutoIncrementPrimaryKey(connection, sourcesGeomTable, DatabaseHelper.normalizeColumnName(connection, 'PK'))
+    DatabaseHelper.dropTableIfExists(connection, sourcesPointsTable)
+    DatabaseHelper.createSpatialIndex(connection, sourcesGeomTable, DatabaseHelper.getGeometryColumnName(connection))
 
-
-    int srid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(roadsTableName))
-    def table_name = "SOURCES_GEOM"
-    GeometryMetaData metaData = GeometryTableUtilities.getMetaData(connection, TableLocation.parse(table_name, DBUtils.getDBType(connection)), "THE_GEOM");
+    int srid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(normalizedRoadsTable))
+    def table_name = sourcesGeomTable
+    GeometryMetaData metaData = GeometryTableUtilities.getMetaData(connection, TableLocation.parse(table_name, DBUtils.getDBType(connection)), DatabaseHelper.getGeometryColumnName(connection));
     metaData.setSRID(srid)
     metaData.setHasZ(true)
     metaData.initGeometryType()
 
+    String geomColumn = DatabaseHelper.getGeometryColumnName(connection)
     connection.createStatement().execute(String.format(Locale.ROOT, "ALTER TABLE %s ALTER COLUMN %s %s USING ST_SetSRID(ST_UPDATEZ(%s, %f),%d)",
-            TableLocation.parse(table_name, DBUtils.getDBType(connection)), "THE_GEOM" , metaData.getSQL(),"THE_GEOM", h,srid))
+            TableLocation.parse(table_name, DBUtils.getDBType(connection)), geomColumn , metaData.getSQL(),geomColumn, h,srid))
 
 
     logger.info('End !')

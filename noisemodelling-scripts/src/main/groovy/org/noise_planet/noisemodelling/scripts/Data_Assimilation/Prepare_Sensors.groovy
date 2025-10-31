@@ -6,6 +6,7 @@ import groovy.transform.CompileStatic
 import org.h2gis.utilities.wrapper.ConnectionWrapper
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import org.noise_planet.noisemodelling.wps.Database_Manager.DatabaseHelper
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.sql.Connection
@@ -70,6 +71,11 @@ static def exec(Connection connection,input){
     logger.info('Start Preparation of Sensor dataset ')
 
     Sql sql = new Sql(connection)
+    boolean isPostgis = DatabaseHelper.isPostgreSQL(connection)
+    String sensorsLocationTable = DatabaseHelper.normalizeTableName(connection, 'SENSORS_LOCATION')
+    String sensorsMeasurementsTable = DatabaseHelper.normalizeTableName(connection, 'SENSORS_MEASUREMENTS')
+    String sensorsTrainingTable = DatabaseHelper.normalizeTableName(connection, 'SENSORS_MEASUREMENTS_TRAINING')
+    String geomColumn = DatabaseHelper.normalizeColumnName(connection, 'THE_GEOM')
     String folderPath = input['workingFolder']
     if (!folderPath.endsWith("/")) folderPath += "/"
 
@@ -83,30 +89,45 @@ static def exec(Connection connection,input){
     measurementTable(connection,selectedData)
 
     boolean columnExists = false
-    sql.eachRow(" SELECT COUNT(*) AS cnt "+
-            " FROM INFORMATION_SCHEMA.COLUMNS "+
-            " WHERE TABLE_NAME = 'SENSORS_LOCATION' "+
-            " AND COLUMN_NAME = 'DEVEUI' ")
-            { row ->
-                if (row.cnt > 0) {
-                    columnExists = true
-                }
-            }
-
-    if (columnExists) {
-        sql.execute("ALTER TABLE SENSORS_LOCATION RENAME COLUMN DEVEUI TO IDSENSOR")
+    String schemaClause = isPostgis ? " AND table_schema = current_schema()" : " AND TABLE_SCHEMA = 'PUBLIC'"
+    String columnCheckQuery = "SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE LOWER(TABLE_NAME) = ? AND LOWER(COLUMN_NAME) = 'deveui'" + schemaClause
+    sql.eachRow(columnCheckQuery, [sensorsLocationTable.toLowerCase()]) { row ->
+        if (row.cnt > 0) {
+            columnExists = true
+        }
     }
 
-    sql.execute("ALTER TABLE SENSORS_LOCATION ALTER COLUMN The_GEOM " +
-            "TYPE geometry(PointZ, "+targetSRID+") " +
-            "USING ST_SetSRID(ST_Force3D(THE_GEOM), "+targetSRID+")")
+    if (columnExists) {
+        sql.execute("ALTER TABLE " + sensorsLocationTable + " RENAME COLUMN deveui TO idsensor")
+    }
+
+    if (isPostgis) {
+        sql.execute("ALTER TABLE " + sensorsLocationTable + " ALTER COLUMN " + geomColumn + " TYPE geometry(PointZ, " + targetSRID + ") USING ST_SetSRID(ST_Force3D(" + geomColumn + "), " + targetSRID + ")")
+    } else {
+        sql.execute("UPDATE " + sensorsLocationTable + " SET " + geomColumn + " = ST_SetSRID(ST_Force3D(" + geomColumn + "), " + targetSRID + ") WHERE " + geomColumn + " IS NOT NULL")
+    }
+    DatabaseHelper.ensureSRID(connection, sensorsLocationTable, geomColumn, targetSRID)
 
     // Create the RECEIVERS table with unique sensor data from measurement (SENSORS_MEASUREMENTS_TRAINING: training data) table.
-    sql.execute("ALTER TABLE SENSORS_LOCATION ADD PK INT AUTO_INCREMENT PRIMARY KEY;")
+    DatabaseHelper.addAutoIncrementPrimaryKey(connection, sensorsLocationTable, 'PK')
 
-
-    sql.execute("ALTER TABLE SENSORS_MEASUREMENTS ADD COLUMN THE_GEOM GEOMETRY(PointZ,"+targetSRID+")")
-    sql.execute("ALTER TABLE SENSORS_MEASUREMENTS ADD COLUMN IDRECEIVER INTEGER")
+    String measurementColumnCheck = "SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE LOWER(TABLE_NAME) = ? AND LOWER(COLUMN_NAME) = ?" + schemaClause
+    Closure<Integer> columnCount = { String tableName, String columnName ->
+        def row = sql.firstRow(measurementColumnCheck, [tableName.toLowerCase(), columnName.toLowerCase()])
+        return (row?.cnt ?: 0) as int
+    }
+    boolean measurementHasGeom = columnCount(sensorsMeasurementsTable, geomColumn) > 0
+    if (!measurementHasGeom) {
+        if (isPostgis) {
+            sql.execute("ALTER TABLE " + sensorsMeasurementsTable + " ADD COLUMN " + geomColumn + " geometry(PointZ, " + targetSRID + ")")
+        } else {
+            sql.execute("ALTER TABLE " + sensorsMeasurementsTable + " ADD COLUMN " + geomColumn + " GEOMETRY")
+        }
+    }
+    DatabaseHelper.ensureSRID(connection, sensorsMeasurementsTable, geomColumn, targetSRID)
+    if (columnCount(sensorsMeasurementsTable, 'idreceiver') == 0) {
+        sql.execute("ALTER TABLE " + sensorsMeasurementsTable + " ADD COLUMN idreceiver INTEGER")
+    }
 
     sql.execute("UPDATE SENSORS_MEASUREMENTS sm " +
             "SET THE_GEOM = (select ST_Transform(s.The_GEOM, "+targetSRID+" )"+
@@ -120,14 +141,24 @@ static def exec(Connection connection,input){
 
     extractObservationData(connection,trainingRatio)
 
-    sql.execute("ALTER TABLE SENSORS_MEASUREMENTS_TRAINING ALTER COLUMN THE_GEOM TYPE geometry(PointZ, "+targetSRID+") " +
-            "USING ST_SetSRID(ST_Force3D(THE_GEOM), "+targetSRID+")")
+    if (isPostgis) {
+        sql.execute("ALTER TABLE " + sensorsTrainingTable + " ALTER COLUMN " + geomColumn + " TYPE geometry(PointZ, " + targetSRID + ") USING ST_SetSRID(ST_Force3D(" + geomColumn + "), " + targetSRID + ")")
+    } else {
+        sql.execute("UPDATE " + sensorsTrainingTable + " SET " + geomColumn + " = ST_SetSRID(ST_Force3D(" + geomColumn + "), " + targetSRID + ") WHERE " + geomColumn + " IS NOT NULL")
+    }
+    DatabaseHelper.ensureSRID(connection, sensorsTrainingTable, geomColumn, targetSRID)
 
-    String inputTable = "SENSORS_MEASUREMENTS_TRAINING"
-    sql.execute("ALTER TABLE "+inputTable+" ALTER COLUMN EPOCH SET DATA TYPE INTEGER")
-    sql.execute("ALTER TABLE "+inputTable+" ALTER COLUMN IDRECEIVER SET DATA TYPE INTEGER")
-    sql.execute("ALTER TABLE "+inputTable+" ALTER COLUMN TEMP SET DATA TYPE FLOAT")
-    sql.execute("ALTER TABLE "+inputTable+" ALTER COLUMN LAEQ SET DATA TYPE FLOAT")
+    if (isPostgis) {
+        sql.execute("ALTER TABLE " + sensorsTrainingTable + " ALTER COLUMN epoch TYPE INTEGER USING epoch::integer")
+        sql.execute("ALTER TABLE " + sensorsTrainingTable + " ALTER COLUMN idreceiver TYPE INTEGER USING idreceiver::integer")
+        sql.execute("ALTER TABLE " + sensorsTrainingTable + " ALTER COLUMN temp TYPE DOUBLE PRECISION USING temp::double precision")
+        sql.execute("ALTER TABLE " + sensorsTrainingTable + " ALTER COLUMN laeq TYPE DOUBLE PRECISION USING laeq::double precision")
+    } else {
+        sql.execute("ALTER TABLE " + sensorsTrainingTable + " ALTER COLUMN epoch SET DATA TYPE INTEGER")
+        sql.execute("ALTER TABLE " + sensorsTrainingTable + " ALTER COLUMN idreceiver SET DATA TYPE INTEGER")
+        sql.execute("ALTER TABLE " + sensorsTrainingTable + " ALTER COLUMN temp SET DATA TYPE FLOAT")
+        sql.execute("ALTER TABLE " + sensorsTrainingTable + " ALTER COLUMN laeq SET DATA TYPE FLOAT")
+    }
 
     logger.info('End Preparation of Sensor dataset ')
     return "Calculation Done ! The tables SENSORS_MEASUREMENTS, SENSORS_LOCATION and SENSORS_MEASUREMENTS_TRAINING have been created."
