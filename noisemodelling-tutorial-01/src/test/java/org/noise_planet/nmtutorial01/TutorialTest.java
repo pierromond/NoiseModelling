@@ -1,11 +1,9 @@
 package org.noise_planet.nmtutorial01;
 
 import org.h2gis.functions.factory.H2GISDBFactory;
-import org.h2gis.postgis_jts_osgi.DataSourceFactoryImpl;
 import org.h2gis.utilities.JDBCUtilities;
 import org.h2gis.utilities.TableLocation;
 import org.h2gis.utilities.dbtypes.DBTypes;
-import org.h2gis.utilities.dbtypes.DBUtils;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
@@ -21,6 +19,7 @@ import org.testcontainers.utility.DockerImageName;
 
 import java.net.ConnectException;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.*;
 
@@ -37,27 +36,33 @@ public class TutorialTest {
     private static PostgreSQLContainer<?> POSTGIS_CONTAINER;
 
     @BeforeAll
+    @SuppressWarnings("resource")
     public static void startPostgisContainer() {
         if (!ENABLE_TESTCONTAINERS) {
             LOGGER.info("PostGIS Testcontainer disabled via NM_TUTORIAL_USE_TESTCONTAINERS=false");
             return;
         }
 
+        PostgreSQLContainer<?> container = null;
         try {
-            POSTGIS_CONTAINER = new PostgreSQLContainer<>(
+            container = new PostgreSQLContainer<>(
                     DockerImageName.parse("postgis/postgis:15-3.3").asCompatibleSubstituteFor("postgres"))
                     .withDatabaseName(DEFAULT_DB_NAME)
                     .withUsername(DEFAULT_DB_USER)
                     .withPassword(DEFAULT_DB_PASSWORD);
-            POSTGIS_CONTAINER.start();
+            container.start();
 
-            try (Connection connection = POSTGIS_CONTAINER.createConnection("")) {
+            try (Connection connection = container.createConnection("")) {
                 connection.createStatement().execute("CREATE EXTENSION IF NOT EXISTS postgis");
                 connection.createStatement().execute("CREATE EXTENSION IF NOT EXISTS postgis_topology");
             }
 
+            POSTGIS_CONTAINER = container;
             LOGGER.info("PostGIS Testcontainer started at {}", POSTGIS_CONTAINER.getJdbcUrl());
         } catch (Exception e) {
+            if (container != null) {
+                container.close();
+            }
             LOGGER.warn("Unable to start PostGIS Testcontainer. Falling back to external database lookup.", e);
             POSTGIS_CONTAINER = null;
         }
@@ -72,27 +77,14 @@ public class TutorialTest {
 
     @Test
     public void testPostgisNoiseModelling1() throws Exception {
-        DataSourceFactoryImpl dataSourceFactory = new DataSourceFactoryImpl();
-        Properties p = buildPostgresProperties();
-        try(Connection connection = JDBCUtilities.wrapConnection(dataSourceFactory.createDataSource(p).getConnection())) {
+        Properties config = buildPostgresProperties();
+        try(Connection connection = openPostgisConnection(config)) {
             if (POSTGIS_CONTAINER != null) {
                 ensurePostgisExtensions(connection);
             }
             connection.createStatement().execute("DROP TABLE IF EXISTS receivers_level");
             connection.createStatement().execute("DROP TABLE IF EXISTS contouring_noise_map");
-            NoiseMapByReceiverMaker map;
-            try {
-                map = Main.mainWithConnection(connection, "target/postgis");
-            } catch (SQLException sqlException) {
-                if (shouldSkipSchemaPreparation(sqlException)) {
-                    LOGGER.warn("Skipping PostGIS tutorial test due to missing schema prerequisites: {}",
-                            sqlException.getLocalizedMessage());
-                    Assumptions.assumeTrue(false,
-                            "PostGIS tutorial schema not prepared: " + sqlException.getLocalizedMessage());
-                    return;
-                }
-                throw sqlException;
-            }
+            NoiseMapByReceiverMaker map = Main.mainWithConnection(connection, "target/postgis");
             String receiverTable = TableLocation.capsIdentifier(
                     NoiseMapDatabaseParameters.DEFAULT_RECEIVERS_LEVEL_TABLE_NAME, DBTypes.POSTGIS);
             assertTrue(JDBCUtilities.tableExists(connection.unwrap(Connection.class), receiverTable));
@@ -121,7 +113,7 @@ public class TutorialTest {
                 return;
             }
             throw psqlException;
-    }
+        }
     }
 
     @Test
@@ -160,6 +152,24 @@ public class TutorialTest {
                 LOGGER.warn(psqlException.getLocalizedMessage(), psqlException);
             }
         }
+    }
+
+    private static Connection openPostgisConnection(Properties config) throws SQLException {
+        String host = config.getProperty("serverName");
+        String port = config.getProperty("portNumber");
+        String database = config.getProperty("databaseName");
+        String user = config.getProperty("user");
+        String password = config.getProperty("password");
+
+        String jdbcUrl = "jdbc:postgresql://" + host + ":" + port + "/" + database;
+        LOGGER.info("Connecting to PostGIS at {}:{} database {} as {}", host, port, database, user);
+
+        Properties props = new Properties();
+        props.setProperty("user", user);
+        props.setProperty("password", password);
+        props.setProperty("reWriteBatchedInserts", "true");
+
+        return JDBCUtilities.wrapConnection(DriverManager.getConnection(jdbcUrl, props));
     }
 
     private static Properties buildPostgresProperties() {
@@ -208,16 +218,5 @@ public class TutorialTest {
                 || normalized.contains("connection refused")
                 || normalized.contains("no route to host")
                 || normalized.contains("timeout");
-    }
-
-    private static boolean shouldSkipSchemaPreparation(SQLException exception) {
-        String message = exception.getMessage();
-        if (message == null) {
-            return false;
-        }
-        String normalized = message.toLowerCase(Locale.ROOT);
-        return normalized.contains("table") && normalized.contains("not found")
-                || normalized.contains("relation") && normalized.contains("does not exist")
-                || normalized.contains("role \"root\" does not exist");
     }
 }

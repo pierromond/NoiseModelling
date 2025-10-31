@@ -244,10 +244,8 @@ def exec(connection, Map input) {
     if(createTriangles) {
         sql.execute("DROP TABLE IF EXISTS TRIANGLES")
         
-        // H2GIS uses "POLYGON Z", PostgreSQL uses "PolygonZ"
-        String polygonType = DatabaseHelper.isPostgreSQL(connection) ? "PolygonZ" : "POLYGON Z"
-        
-        sql.execute("CREATE TABLE TRIANGLES(pk serial NOT NULL, " + geomColumn + " geometry(" + polygonType + ", "+srid+"), PK_1 integer not null," +
+        // Both databases support geometry(PolygonZ, srid) syntax
+        sql.execute("CREATE TABLE TRIANGLES(pk serial NOT NULL, " + geomColumn + " geometry(PolygonZ, "+srid+"), PK_1 integer not null," +
                 " PK_2 integer not null, PK_3 integer not null, cell_id integer not null, PRIMARY KEY (PK))")
         sql.execute("INSERT INTO TRIANGLES(" + geomColumn + ", PK_1, PK_2, PK_3, CELL_ID) " +
                 "SELECT ST_ConvexHull(ST_UNION(A." + geomColumn + ", ST_UNION(B." + geomColumn + ", C." + geomColumn + "))) " + geomColumn + ", " +

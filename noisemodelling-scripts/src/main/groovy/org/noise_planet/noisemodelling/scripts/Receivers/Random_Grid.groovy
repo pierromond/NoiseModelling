@@ -188,14 +188,9 @@ def exec(Connection connection, input) {
 
     if (input['fence']) {
         // Delete points outside geom but inside
-        // PostgreSQL requires WKT for geometry parameters
-        if (DatabaseHelper.isPostgreSQL(connection)) {
-            sql.execute("DELETE FROM " + receivers_table_name + " WHERE NOT ST_Intersects(" + geomColumn + ", ST_GeomFromText(?, ?))", 
-                       [fenceGeom.toString(), fenceGeom.getSRID()])
-        } else {
-            sql.execute("DELETE FROM " + receivers_table_name + " WHERE NOT ST_Intersects(" + geomColumn + ", :geom)", 
-                       ['geom': fenceGeom])
-        }
+        DatabaseHelper.GeometryParameter fenceParam = DatabaseHelper.prepareGeometryParameter(connection, fenceGeom, 'fenceGeom')
+        sql.execute("DELETE FROM " + receivers_table_name + " WHERE NOT ST_Intersects(" + geomColumn + ", " + fenceParam.expression + ")", 
+                   fenceParam.parameters)
     }
 
     logger.info("Create spatial index on " + receivers_table_name)
@@ -215,12 +210,7 @@ def exec(Connection connection, input) {
     }
 
     logger.info('Add Primary Key column...')
-    // Cross-database compatible AUTO_INCREMENT
-    if (DatabaseHelper.isPostgreSQL(connection)) {
-        sql.execute("ALTER TABLE " + receivers_table_name + " ADD pk SERIAL PRIMARY KEY;")
-    } else {
-        sql.execute("ALTER TABLE " + receivers_table_name + " ADD pk INT AUTO_INCREMENT PRIMARY KEY;")
-    }
+    DatabaseHelper.addAutoIncrementPrimaryKey(connection, receivers_table_name, 'pk')
 
     // Process Done
     resultString = "Process done. Table of receivers " + receivers_table_name + " created !"

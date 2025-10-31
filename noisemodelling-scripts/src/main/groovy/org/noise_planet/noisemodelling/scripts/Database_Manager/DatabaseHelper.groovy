@@ -27,15 +27,27 @@ import org.locationtech.jts.geom.Geometry
 import org.locationtech.jts.geom.GeometryFactory
 import org.locationtech.jts.geom.Coordinate
 import org.locationtech.jts.geom.Envelope
+import org.locationtech.jts.io.WKBReader
+import org.postgresql.util.PGobject
 
 import java.math.BigDecimal
 
 import java.sql.Connection
+import java.sql.PreparedStatement
+import java.sql.ResultSet
 
 /**
  * Helper class for database operations that work across H2GIS and PostGIS
  */
 class DatabaseHelper {
+
+    /**
+     * Container for geometry parameter metadata when using named parameters.
+     */
+    static class GeometryParameter {
+        String expression
+        Map<String, Object> parameters
+    }
 
     /**
      * Detect database type from connection
@@ -54,6 +66,36 @@ class DatabaseHelper {
      */
     static boolean isPostgreSQL(Connection connection) {
         return getDBType(connection) == DBTypes.POSTGRESQL
+    }
+
+    /**
+     * Returns a geometry column definition that works on both databases.
+     * When SRID is provided (>0) the column is declared with explicit SRID metadata.
+     * @param connection Database connection
+     * @param columnName Geometry column name
+     * @param geometryType Geometry type (e.g. "Point", "PointZ", "Polygon")
+     * @param srid Spatial reference identifier, optional (<=0 to omit)
+     * @return Column definition string (e.g. "the_geom geometry(PointZ, 2154)")
+     */
+    static String geometryColumnDefinition(Connection connection, String columnName, String geometryType = null, int srid = 0) {
+        StringBuilder definition = new StringBuilder()
+        definition.append(columnName).append(" ")
+
+        List<String> typeParts = []
+        if (geometryType) {
+            typeParts.add(geometryType)
+        }
+        if (srid > 0) {
+            typeParts.add(String.valueOf(srid))
+        }
+
+        if (typeParts.isEmpty()) {
+            definition.append("geometry")
+        } else {
+            definition.append("geometry(").append(typeParts.join(', ')).append(")")
+        }
+
+        return definition.toString()
     }
 
     /**
@@ -77,6 +119,17 @@ class DatabaseHelper {
      */
     static String normalizeTableName(String tableName, Connection connection) {
         return isPostgreSQL(connection) ? tableName : tableName.toUpperCase()
+    }
+
+    /**
+     * Normalize column name returned by JDBC ResultSets.
+     * PostgreSQL lowercases unquoted identifiers while H2GIS uppercases them.
+     * @param connection Database connection
+     * @param columnName Logical column name
+     * @return Column name as exposed by ResultSet
+     */
+    static String normalizeResultSetColumnName(Connection connection, String columnName) {
+        return isPostgreSQL(connection) ? columnName.toLowerCase() : columnName.toUpperCase()
     }
 
     /**
@@ -106,6 +159,28 @@ class DatabaseHelper {
             return pkIndex
         } else {
             return JDBCUtilities.getIntegerPrimaryKey(connection, TableLocation.parse(tableName.toUpperCase()))
+        }
+    }
+
+    /**
+     * Retrieve primary key column name for a table.
+     * @param connection Database connection
+     * @param tableName Table name
+     * @return Primary key column name or empty string if none
+     */
+    static String getPrimaryKeyColumn(Connection connection, String tableName) {
+        String schema = connection.getSchema()
+        String normalizedTable = normalizeTableName(connection, tableName)
+
+        ResultSet rs = connection.getMetaData().getPrimaryKeys(connection.getCatalog(), schema, normalizedTable)
+        try {
+            if (rs.next()) {
+                String columnName = rs.getString("COLUMN_NAME")
+                return columnName != null ? columnName : ""
+            }
+            return ""
+        } finally {
+            rs.close()
         }
     }
 
@@ -366,6 +441,25 @@ class DatabaseHelper {
     }
 
     /**
+     * Add an auto-increment primary key column in a database agnostic way.
+     * @param connection Database connection
+     * @param tableName Table name
+     * @param columnName Column name to create (default: pk)
+     */
+    static void addAutoIncrementPrimaryKey(Connection connection, String tableName, String columnName = 'pk') {
+        def stmt = connection.createStatement()
+        try {
+            if (isPostgreSQL(connection)) {
+                stmt.execute("ALTER TABLE ${tableName} ADD COLUMN ${columnName} SERIAL PRIMARY KEY")
+            } else {
+                stmt.execute("ALTER TABLE ${tableName} ADD COLUMN ${columnName} INT AUTO_INCREMENT PRIMARY KEY")
+            }
+        } finally {
+            stmt.close()
+        }
+    }
+
+    /**
      * Get SQL for setting SRID on geometry column
      * @param connection Database connection
      * @param geomColumn Geometry column name
@@ -388,6 +482,66 @@ class DatabaseHelper {
         return isPostgreSQL(connection)
             ? "ST_GeometryType(${geomColumn})"
             : "ST_GeometryType(${geomColumn})"
+    }
+
+    /**
+     * Prepare a geometry parameter for use with Groovy Sql named parameters.
+     * Returns an expression fragment and parameters map suited for the connection type.
+     * @param connection Database connection
+     * @param geometry Geometry instance (must have SRID set when using PostgreSQL)
+     * @param parameterBase Base name for the parameter (e.g. "fenceGeom")
+     * @return GeometryParameter containing SQL expression and parameter map
+     */
+    static GeometryParameter prepareGeometryParameter(Connection connection, Geometry geometry, String parameterBase) {
+        GeometryParameter result = new GeometryParameter(expression: 'NULL', parameters: [:])
+        if (geometry == null) {
+            return result
+        }
+
+        if (isPostgreSQL(connection)) {
+            int srid = geometry.getSRID()
+            result.expression = "ST_SetSRID(ST_GeomFromText(:${parameterBase}Wkt), :${parameterBase}Srid)"
+            result.parameters[(parameterBase + 'Wkt')] = geometry.toText()
+            result.parameters[(parameterBase + 'Srid')] = srid
+        } else {
+            result.expression = ":${parameterBase}"
+            result.parameters[parameterBase] = geometry
+        }
+        return result
+    }
+
+    /**
+     * Read geometry from a ResultSet in a cross-database manner.
+     * @param connection Database connection
+     * @param rs ResultSet positioned on a row
+     * @param columnName Column name to read (logical name)
+     * @return Geometry instance or null if column is null
+     */
+    static Geometry getGeometryFromResultSet(Connection connection, ResultSet rs, String columnName) {
+        String resultSetColumn = normalizeResultSetColumnName(connection, columnName)
+        Object geomObj = rs.getObject(resultSetColumn)
+        if (geomObj == null) {
+            return null
+        }
+
+        if (geomObj instanceof Geometry) {
+            return geomObj as Geometry
+        }
+
+        if (isPostgreSQL(connection)) {
+            String hexValue
+            if (geomObj instanceof PGobject) {
+                hexValue = ((PGobject) geomObj).getValue()
+            } else {
+                hexValue = geomObj.toString()
+            }
+            if (!hexValue) {
+                return null
+            }
+            return new WKBReader().read(hexValue.decodeHex())
+        }
+
+        throw new IllegalArgumentException("Unsupported geometry object type: " + geomObj.getClass().getName())
     }
 
     /**
@@ -680,6 +834,73 @@ class DatabaseHelper {
             }
             ensureSRID(connection, tableName, geomColumn, defaultSRID)
         }
+    }
+
+    /**
+     * Create a SQL INSERT statement for 3D points that works across both databases.
+     * PostgreSQL requires ST_MakePoint(x,y,z) while H2GIS accepts Geometry objects.
+     * Returns the SQL query string and number of parameters per point.
+     * @param connection Database connection
+     * @param tableName Target table name
+     * @param geomColumn Geometry column name
+     * @param srid SRID for the geometries
+     * @param otherColumns List of other column names (besides geom column)
+     * @return Map with 'query' (String) and 'geomParamCount' (int: 3 for PG coords, 1 for H2 object)
+     */
+    static Map<String, Object> prepare3DPointInsertStatement(Connection connection, String tableName, 
+                                                              String geomColumn, int srid, List<String> otherColumns) {
+        StringBuilder query = new StringBuilder("INSERT INTO ").append(tableName).append(" (")
+        query.append(geomColumn)
+        otherColumns.each { col -> query.append(", ").append(col) }
+        query.append(") VALUES (")
+        
+        int geomParamCount
+        if (isPostgreSQL(connection)) {
+            // PostgreSQL: ST_SetSRID(ST_MakePoint(x, y, z), srid)
+            query.append("ST_SetSRID(ST_MakePoint(?, ?, ?), ").append(srid).append(")")
+            geomParamCount = 3
+        } else {
+            // H2GIS: accepts Geometry object directly
+            query.append("?")
+            geomParamCount = 1
+        }
+        
+        // Add placeholders for other columns
+        otherColumns.each { query.append(", ?") }
+        query.append(")")
+        
+        return [query: query.toString(), geomParamCount: geomParamCount]
+    }
+
+    /**
+     * Add parameters to a PreparedStatement batch for a 3D point insertion.
+     * Handles the difference between PostgreSQL (3 coordinate params) and H2GIS (1 Geometry param).
+     * @param connection Database connection
+     * @param ps PreparedStatement
+     * @param coordinate 3D coordinate to insert
+     * @param factory GeometryFactory with SRID set
+     * @param otherValues Additional column values (in order matching otherColumns from prepare statement)
+     */
+    static void addBatch3DPoint(Connection connection, PreparedStatement ps, Coordinate coordinate,
+                                GeometryFactory factory, List<Object> otherValues) {
+        int paramIndex = 1
+        
+        if (isPostgreSQL(connection)) {
+            // PostgreSQL: set x, y, z separately
+            ps.setDouble(paramIndex++, coordinate.x)
+            ps.setDouble(paramIndex++, coordinate.y)
+            ps.setDouble(paramIndex++, coordinate.z)
+        } else {
+            // H2GIS: set Geometry object
+            ps.setObject(paramIndex++, factory.createPoint(coordinate))
+        }
+        
+        // Set other column values
+        otherValues.each { value ->
+            ps.setObject(paramIndex++, value)
+        }
+        
+        ps.addBatch()
     }
 }
 
