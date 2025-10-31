@@ -19,3 +19,4 @@ postgis_data/
 # GitHub Copilot development instructions
 .github/copilot-instructions.md
 
+.vscode/settings.json

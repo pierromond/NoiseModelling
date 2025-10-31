@@ -170,9 +170,18 @@ public final class GeometrySqlHelper {
         // Use reflection to avoid hard dependency on postgis-jdbc
         if (geomObj.getClass().getName().equals("net.postgis.jdbc.PGgeometry")) {
             try {
-                // Call getGeometry() method to get JTS Geometry
+                // PGgeometry.getGeometry() returns net.postgis.jdbc.geometry.Geometry (not JTS)
+                // We need to call getJTSGeometry() on that object to get JTS Geometry
                 java.lang.reflect.Method getGeometryMethod = geomObj.getClass().getMethod("getGeometry");
-                return (Geometry) getGeometryMethod.invoke(geomObj);
+                Object postgisGeom = getGeometryMethod.invoke(geomObj);
+                
+                if (postgisGeom == null) {
+                    return null;
+                }
+                
+                // Now call getJTSGeometry() on the PostGIS geometry object to get JTS Geometry
+                java.lang.reflect.Method getJTSGeometryMethod = postgisGeom.getClass().getMethod("getJTSGeometry");
+                return (Geometry) getJTSGeometryMethod.invoke(postgisGeom);
             } catch (Exception e) {
                 throw new SQLException("Failed to extract geometry from PGgeometry object in column " + columnName, e);
             }
