@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.noise_planet.noisemodelling.jdbc.NoiseMapByReceiverMaker;
 import org.noise_planet.noisemodelling.jdbc.NoiseMapDatabaseParameters;
 import org.noise_planet.noisemodelling.jdbc.input.DefaultTableLoader;
+import org.noise_planet.noisemodelling.jdbc.utils.PostgisConnectionWrapper;
 import org.postgresql.util.PSQLException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -108,7 +109,7 @@ public class TutorialTest {
 
         } catch (PSQLException psqlException) {
             if(shouldSkipPostgisTest(psqlException)) {
-                LOGGER.warn("Skipping PostGIS tutorial test: {}", psqlException.getLocalizedMessage());
+                LOGGER.warn("Skipping PostGIS tutorial test: {}", psqlException.getLocalizedMessage(), psqlException);
                 Assumptions.assumeTrue(false, "PostGIS database not available: " + psqlException.getLocalizedMessage());
                 return;
             }
@@ -169,7 +170,10 @@ public class TutorialTest {
         props.setProperty("password", password);
         props.setProperty("reWriteBatchedInserts", "true");
 
-        return JDBCUtilities.wrapConnection(DriverManager.getConnection(jdbcUrl, props));
+        // Use H2GIS postgis-jts module to wrap the connection
+        // This provides automatic PGobject → JTS Geometry conversion
+    Connection rawConnection = DriverManager.getConnection(jdbcUrl, props);
+    return new PostgisConnectionWrapper(rawConnection);
     }
 
     private static Properties buildPostgresProperties() {

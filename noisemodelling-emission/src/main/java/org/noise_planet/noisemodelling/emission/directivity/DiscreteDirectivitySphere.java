@@ -11,9 +11,7 @@ package org.noise_planet.noisemodelling.emission.directivity;
 
 import org.noise_planet.noisemodelling.emission.utils.Utils;
 
-import java.io.Serializable;
 import java.util.*;
-import java.util.function.DoublePredicate;
 
 /**
  * Describe Attenuation directivity over a sphere

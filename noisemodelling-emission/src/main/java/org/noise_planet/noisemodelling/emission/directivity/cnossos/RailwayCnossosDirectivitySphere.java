@@ -13,9 +13,6 @@ import org.noise_planet.noisemodelling.emission.LineSource;
 import org.noise_planet.noisemodelling.emission.directivity.DirectivitySphere;
 import org.noise_planet.noisemodelling.emission.railway.cnossos.RailWayCnossosParameters;
 
-import java.util.Arrays;
-import java.util.List;
-
 
 public final class RailwayCnossosDirectivitySphere implements DirectivitySphere {
     LineSource lineSource;

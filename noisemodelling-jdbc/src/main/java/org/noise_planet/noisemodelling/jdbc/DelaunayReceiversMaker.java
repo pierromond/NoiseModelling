@@ -524,7 +524,7 @@ public class DelaunayReceiversMaker extends GridMapMaker {
                 connection.setAutoCommit(false);
             }
             st.setFetchDirection(ResultSet.FETCH_FORWARD);
-            try (SpatialResultSet rs = st.executeQuery().unwrap(SpatialResultSet.class)) {
+            try (SpatialResultSet rs = GeometrySqlHelper.unwrapSpatialResultSet(st.executeQuery(), dbType)) {
                 while (rs.next()) {
                     Geometry geo = GeometrySqlHelper.getGeometry(rs, sourceGeomName, dbType);
                     if (geo != null) {

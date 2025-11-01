@@ -16,7 +16,6 @@ venv/
 pgadmin_data/
 postgis_data/
 
-# GitHub Copilot development instructions
+.vscode/
 .github/copilot-instructions.md
-
-.vscode/settings.json
+.github/copilot-instructions-old.md

@@ -138,20 +138,26 @@ class Main {
             srid = GeometryTableUtilities.getSRID(connection, TableLocation.parse("LW_ROADS", dbType));
         }
         List<Double> isoLevels = IsoSurface.NF31_133_ISO; // default values
-        IsoSurface isoSurface = new IsoSurface(isoLevels, srid);
-        isoSurface.setSmoothCoefficient(0.5);
-        isoSurface.setPointTable(TableLocation.parse(noiseMapByReceiverMaker.getNoiseMapDatabaseParameters().receiversLevelTable, dbType).toString());
-        isoSurface.createTable(connection, "IDRECEIVER");
-        logger.info("Export iso contours");
+    IsoSurface isoSurface = new IsoSurface(isoLevels, srid);
+    isoSurface.setSmoothCoefficient(0.5);
+    isoSurface.setPointTable(TableLocation.parse(
+        noiseMapByReceiverMaker.getNoiseMapDatabaseParameters().receiversLevelTable, dbType).toString());
+    isoSurface.createTable(connection, "IDRECEIVER");
+    logger.info("Export iso contours");
 
+    if (!GeometrySqlHelper.isPostgreSQL(dbType)) {
         SHPWrite.exportTable(connection, Paths.get(workingDir, isoSurface.getOutputTable()+".shp").toString(),
-                isoSurface.getOutputTable(), ValueBoolean.TRUE);
+            isoSurface.getOutputTable(), ValueBoolean.TRUE);
 
         SHPWrite.exportTable(connection, Paths.get(workingDir, noiseMapByReceiverMaker.getSourcesTableName()+".shp").toString(),
-                noiseMapByReceiverMaker.getSourcesTableName(), ValueBoolean.TRUE);
+            noiseMapByReceiverMaker.getSourcesTableName(), ValueBoolean.TRUE);
 
         SHPWrite.exportTable(connection, Paths.get(workingDir, noiseMapByReceiverMaker.getNoiseMapDatabaseParameters().getReceiversLevelTable()+".shp").toString(),
-                noiseMapByReceiverMaker.getNoiseMapDatabaseParameters().getReceiversLevelTable(), ValueBoolean.TRUE);
+            noiseMapByReceiverMaker.getNoiseMapDatabaseParameters().getReceiversLevelTable(), ValueBoolean.TRUE);
+    } else {
+        logger.info("Skipping SHP export on PostGIS; data remains available in tables {} and {}", isoSurface.getOutputTable(),
+            noiseMapByReceiverMaker.getNoiseMapDatabaseParameters().getReceiversLevelTable());
+    }
 
         return noiseMapByReceiverMaker;
     }

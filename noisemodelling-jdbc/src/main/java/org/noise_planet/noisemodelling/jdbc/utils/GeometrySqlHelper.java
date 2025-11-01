@@ -12,6 +12,7 @@ package org.noise_planet.noisemodelling.jdbc.utils;
 
 import org.h2gis.utilities.GeometryTableUtilities;
 import org.h2gis.utilities.JDBCUtilities;
+import org.h2gis.utilities.SpatialResultSet;
 import org.h2gis.utilities.TableLocation;
 import org.h2gis.utilities.Tuple;
 import org.h2gis.utilities.dbtypes.DBTypes;
@@ -19,8 +20,13 @@ import org.h2gis.utilities.dbtypes.DBUtils;
 import org.locationtech.jts.geom.Envelope;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.io.WKBReader;
+import org.locationtech.jts.io.WKTReader;
 import org.locationtech.jts.io.WKTWriter;
 
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.sql.*;
 import java.util.List;
 import java.util.Locale;
@@ -133,6 +139,130 @@ public final class GeometrySqlHelper {
     }
 
     /**
+     * Obtain a {@link SpatialResultSet} instance that is compatible with both H2GIS and PostgreSQL result sets.
+     * <p>
+    * When using H2GIS, the JDBC driver already supports {@code unwrap(SpatialResultSet.class)}. For PostgreSQL connections
+    * wrapped with the H2GIS {@code postgis-jts} module, the driver exposes geometries directly but does not advertise
+    * {@code SpatialResultSet}. In that case we dynamically create a proxy to expose the same API surface.
+     * </p>
+     *
+     * @param rs The JDBC result set to adapt. The caller must not close {@code rs} separately; closing the returned wrapper
+     *           will close the underlying result set.
+     * @return A {@link SpatialResultSet} view over the provided result set.
+     * @throws SQLException If {@code rs} is {@code null} or cannot be unwrapped and the wrapper cannot be created.
+     */
+    public static SpatialResultSet unwrapSpatialResultSet(ResultSet rs, DBTypes dbType) throws SQLException {
+        if (rs == null) {
+            throw new SQLException("ResultSet must not be null");
+        }
+        if (rs instanceof SpatialResultSet) {
+            return (SpatialResultSet) rs;
+        }
+        try {
+            return rs.unwrap(SpatialResultSet.class);
+        } catch (SQLException unwrapException) {
+            return createSpatialResultSetProxy(rs, dbType);
+        }
+    }
+
+    private static SpatialResultSet createSpatialResultSetProxy(ResultSet rs, DBTypes dbType) {
+        InvocationHandler handler = new InvocationHandler() {
+            private Integer firstGeometryColumn = null;
+
+            @Override
+            public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                String name = method.getName();
+                switch (name) {
+                    case "getGeometry":
+                        if (args == null || args.length == 0) {
+                            return readGeometry(rs, getFirstGeometryColumn());
+                        } else if (args.length == 1) {
+                            if (args[0] instanceof Integer) {
+                                int columnIndex = (Integer) args[0];
+                                ResultSetMetaData meta = rs.getMetaData();
+                                String columnLabel = meta.getColumnLabel(columnIndex);
+                                return readGeometry(rs, columnLabel);
+                            } else if (args[0] instanceof String) {
+                                return readGeometry(rs, (String) args[0]);
+                            }
+                        }
+                        break;
+                    case "updateGeometry":
+                        if (args != null && args.length == 2) {
+                            if (args[0] instanceof Integer && args[1] instanceof Geometry) {
+                                rs.updateObject((Integer) args[0], args[1]);
+                                return null;
+                            } else if (args[0] instanceof String && args[1] instanceof Geometry) {
+                                rs.updateObject((String) args[0], args[1]);
+                                return null;
+                            }
+                        }
+                        break;
+                    case "isWrapperFor":
+                        if (args != null && args.length == 1 && args[0] instanceof Class) {
+                            Class<?> iface = (Class<?>) args[0];
+                            return iface.isAssignableFrom(SpatialResultSet.class) || rs.isWrapperFor(iface);
+                        }
+                        break;
+                    case "unwrap":
+                        if (args != null && args.length == 1 && args[0] instanceof Class) {
+                            Class<?> iface = (Class<?>) args[0];
+                            if (iface.isAssignableFrom(SpatialResultSet.class)) {
+                                return proxy;
+                            }
+                            return rs.unwrap(iface);
+                        }
+                        break;
+                    case "equals":
+                        return proxy == args[0];
+                    case "hashCode":
+                        return System.identityHashCode(proxy);
+                    case "toString":
+                        return "SpatialResultSetProxy(" + rs + ")";
+                    default:
+                        break;
+                }
+                try {
+                    return method.invoke(rs, args);
+                } catch (InvocationTargetException ex) {
+                    throw ex.getTargetException();
+                }
+            }
+
+            private Geometry readGeometry(ResultSet delegate, String columnLabel) throws SQLException {
+                return GeometrySqlHelper.getGeometry(delegate, columnLabel, dbType);
+            }
+
+            private Geometry readGeometry(ResultSet delegate, int columnIndex) throws SQLException {
+                ResultSetMetaData meta = delegate.getMetaData();
+                String columnLabel = meta.getColumnLabel(columnIndex);
+                return readGeometry(delegate, columnLabel);
+            }
+
+            private int getFirstGeometryColumn() throws SQLException {
+                if (firstGeometryColumn != null) {
+                    return firstGeometryColumn;
+                }
+                ResultSetMetaData meta = rs.getMetaData();
+                int columnCount = meta.getColumnCount();
+                for (int columnIndex = 1; columnIndex <= columnCount; columnIndex++) {
+                    String typeName = meta.getColumnTypeName(columnIndex);
+                    if (typeName != null && typeName.toLowerCase(Locale.ROOT).startsWith("geometry")) {
+                        firstGeometryColumn = columnIndex;
+                        return firstGeometryColumn;
+                    }
+                }
+                throw new SQLException("ResultSet does not contain geometry column");
+            }
+        };
+
+        return (SpatialResultSet) Proxy.newProxyInstance(
+                SpatialResultSet.class.getClassLoader(),
+                new Class<?>[]{SpatialResultSet.class},
+                handler);
+    }
+
+    /**
      * Get SQL expression for inserting geometry values via prepared statements.
      * 
      * Returns ST_SetSRID(ST_GeomFromText(?), ?) for both H2GIS and PostGIS,
@@ -170,8 +300,8 @@ public final class GeometrySqlHelper {
         // Use reflection to avoid hard dependency on postgis-jdbc
         if (geomObj.getClass().getName().equals("net.postgis.jdbc.PGgeometry")) {
             try {
-                // PGgeometry.getGeometry() returns net.postgis.jdbc.geometry.Geometry (not JTS)
-                // We need to call getJTSGeometry() on that object to get JTS Geometry
+                // PGgeometry.getGeometry() returns net.postgis.jdbc.geometry.Geometry
+                // This PostGIS geometry has a getJTSGeometry() method that converts to JTS
                 java.lang.reflect.Method getGeometryMethod = geomObj.getClass().getMethod("getGeometry");
                 Object postgisGeom = getGeometryMethod.invoke(geomObj);
                 
@@ -179,9 +309,25 @@ public final class GeometrySqlHelper {
                     return null;
                 }
                 
-                // Now call getJTSGeometry() on the PostGIS geometry object to get JTS Geometry
-                java.lang.reflect.Method getJTSGeometryMethod = postgisGeom.getClass().getMethod("getJTSGeometry");
-                return (Geometry) getJTSGeometryMethod.invoke(postgisGeom);
+                // Try to use the getJTSGeometry() method if available (newer PostGIS JDBC versions)
+                try {
+                    java.lang.reflect.Method getJTSGeometryMethod = postgisGeom.getClass().getMethod("getJTSGeometry");
+                    return (Geometry) getJTSGeometryMethod.invoke(postgisGeom);
+                } catch (NoSuchMethodException nsme) {
+                    // Fallback: manually convert WKT to JTS
+                    // PostGIS geometry toString() returns "SRID=xxx;WKT" format
+                    // We need to strip the SRID prefix
+                    String wktWithSRID = postgisGeom.toString();
+                    String wkt;
+                    if (wktWithSRID.startsWith("SRID=")) {
+                        int semicolonIndex = wktWithSRID.indexOf(';');
+                        wkt = wktWithSRID.substring(semicolonIndex + 1);
+                    } else {
+                        wkt = wktWithSRID;
+                    }
+                    
+                    return new WKTReader().read(wkt);
+                }
             } catch (Exception e) {
                 throw new SQLException("Failed to extract geometry from PGgeometry object in column " + columnName, e);
             }

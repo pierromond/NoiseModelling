@@ -14,6 +14,7 @@ import org.h2gis.functions.factory.H2GISDBFactory;
 import org.h2gis.functions.io.geojson.GeoJsonRead;
 import org.h2gis.utilities.JDBCUtilities;
 import org.h2gis.utilities.SpatialResultSet;
+import org.h2gis.utilities.dbtypes.DBUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -98,7 +99,7 @@ public class IsoSurfaceJDBCTest {
         LayerTinfour delaunayTool = new LayerTinfour();
         try (PreparedStatement st = connection.prepareStatement(
                 "SELECT the_geom FROM DEM")) {
-            try (SpatialResultSet rs = st.executeQuery().unwrap(SpatialResultSet.class)) {
+            try (SpatialResultSet rs = GeometrySqlHelper.unwrapSpatialResultSet(st.executeQuery(), DBUtils.getDBType(connection))) {
                 while (rs.next()) {
                     Geometry pt = rs.getGeometry();
                     if(pt != null) {
@@ -145,7 +146,7 @@ public class IsoSurfaceJDBCTest {
         LayerTinfour delaunayTool = new LayerTinfour();
         try (PreparedStatement st = connection.prepareStatement(
                 "SELECT the_geom FROM DEM")) {
-            try (SpatialResultSet rs = st.executeQuery().unwrap(SpatialResultSet.class)) {
+            try (SpatialResultSet rs = GeometrySqlHelper.unwrapSpatialResultSet(st.executeQuery(), DBUtils.getDBType(connection))) {
                 while (rs.next()) {
                     Geometry pt = rs.getGeometry();
                     if(pt != null) {

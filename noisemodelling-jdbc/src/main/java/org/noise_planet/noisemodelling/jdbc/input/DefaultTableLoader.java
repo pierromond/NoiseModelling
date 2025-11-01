@@ -324,46 +324,23 @@ public class DefaultTableLoader implements NoiseMapByReceiverMaker.TableLoader {
                 "SELECT " + TableLocation.quoteIdentifier(receiverGeomName, dbType ) + pkSelect + " FROM " +
                         receiverTableSql + " WHERE " + receiverPredicate)) {
             org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.setGeometryParameter(st, 1, receiverEnvelope, dbType);
-            try (ResultSet baseResultSet = st.executeQuery()) {
-                if (org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.isPostgreSQL(dbType)) {
-                    while (baseResultSet.next()) {
-                        long receiverPk = baseResultSet.getLong(2);
-                        if(skipReceivers.contains(receiverPk)) {
-                            continue;
-                        } else {
-                            skipReceivers.add(receiverPk);
-                        }
-                        Geometry pt = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(
-                                baseResultSet, receiverGeomName, dbType);
-                        if(pt != null && !pt.isEmpty()) {
-                            if(pt.getCoordinate().getZ() == Coordinate.NULL_ORDINATE) {
-                                throw new IllegalArgumentException("The table " + receiverTableName +
-                                        " contain at least one receiver without Z ordinate." +
-                                        " You must specify X,Y,Z for each receiver");
-                            }
-                            scene.addReceiver(receiverPk, pt.getCoordinate());
-                        }
+            try (SpatialResultSet rs = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.unwrapSpatialResultSet(st.executeQuery(), dbType)) {
+                while (rs.next()) {
+                    long receiverPk = rs.getLong(2);
+                    if(skipReceivers.contains(receiverPk)) {
+                        continue;
+                    } else {
+                        skipReceivers.add(receiverPk);
                     }
-                } else {
-                    try (SpatialResultSet rs = baseResultSet.unwrap(SpatialResultSet.class)) {
-                        while (rs.next()) {
-                            long receiverPk = rs.getLong(2);
-                            if(skipReceivers.contains(receiverPk)) {
-                                continue;
-                            } else {
-                                skipReceivers.add(receiverPk);
-                            }
-                            Geometry pt = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(
-                                    rs, receiverGeomName, dbType);
-                            if(pt != null && !pt.isEmpty()) {
-                                if(pt.getCoordinate().getZ() == Coordinate.NULL_ORDINATE) {
-                                    throw new IllegalArgumentException("The table " + receiverTableName +
-                                            " contain at least one receiver without Z ordinate." +
-                                            " You must specify X,Y,Z for each receiver");
-                                }
-                                scene.addReceiver(receiverPk, pt.getCoordinate(), rs);
-                            }
+                    Geometry pt = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(
+                            rs, receiverGeomName, dbType);
+                    if(pt != null && !pt.isEmpty()) {
+                        if(pt.getCoordinate().getZ() == Coordinate.NULL_ORDINATE) {
+                            throw new IllegalArgumentException("The table " + receiverTableName +
+                                    " contain at least one receiver without Z ordinate." +
+                                    " You must specify X,Y,Z for each receiver");
                         }
+                        scene.addReceiver(receiverPk, pt.getCoordinate(), rs);
                     }
                 }
             }
@@ -551,7 +528,7 @@ public class DefaultTableLoader implements NoiseMapByReceiverMaker.TableLoader {
                 "SELECT " + TableLocation.quoteIdentifier(buildingGeomName, dbType) + additionalQuery + " FROM " +
                         buildingTableSql + " WHERE " + buildingPredicate)) {
             org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.setGeometryParameter(st, 1, fetchGeometry, dbType);
-            try (SpatialResultSet rs = st.executeQuery().unwrap(SpatialResultSet.class)) {
+            try (ResultSet rs = st.executeQuery()) {
                 int columnIndex = 0;
                 if(!pkBuilding.isEmpty()) {
                     columnIndex = JDBCUtilities.getFieldIndex(rs.getMetaData(), pkBuilding);
@@ -686,7 +663,7 @@ public class DefaultTableLoader implements NoiseMapByReceiverMaker.TableLoader {
                 "SELECT " + TableLocation.quoteIdentifier(topoGeomName, dbType) + " FROM " +
                         demTableSql + " WHERE " + topoPredicate)) {
             org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.setGeometryParameter(st, 1, demEnvelope, dbType);
-                try (SpatialResultSet rs = st.executeQuery().unwrap(SpatialResultSet.class)) {
+                try (SpatialResultSet rs = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.unwrapSpatialResultSet(st.executeQuery(), dbType)) {
                     while (rs.next()) {
                         Geometry pt = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(
                                 rs, topoGeomName, dbType);
@@ -742,7 +719,7 @@ public class DefaultTableLoader implements NoiseMapByReceiverMaker.TableLoader {
                 "SELECT " + TableLocation.quoteIdentifier(soilGeomName, dbType) + ", G FROM " +
                         soilTableSql + " WHERE " + soilPredicate)) {
             org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.setGeometryParameter(st, 1, soilEnvelope, dbType);
-                try (SpatialResultSet rs = st.executeQuery().unwrap(SpatialResultSet.class)) {
+                try (SpatialResultSet rs = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.unwrapSpatialResultSet(st.executeQuery(), dbType)) {
                     while (rs.next()) {
                         Geometry mainPolygon = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(
                                 rs, soilGeomName, dbType);
@@ -824,7 +801,7 @@ public class DefaultTableLoader implements NoiseMapByReceiverMaker.TableLoader {
                 connection.setAutoCommit(false);
             }
             st.setFetchDirection(ResultSet.FETCH_FORWARD);
-            try (SpatialResultSet rs = st.executeQuery().unwrap(SpatialResultSet.class)) {
+            try (SpatialResultSet rs = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.unwrapSpatialResultSet(st.executeQuery(), dbType)) {
                 int sourceRowCount = 0;
                 boolean loggedSourceDebug = false;
                 while (rs.next()) {
