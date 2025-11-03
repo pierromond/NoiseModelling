@@ -13,7 +13,6 @@ import org.h2gis.functions.spatial.convert.ST_Force2D;
 import org.h2gis.functions.spatial.convert.ST_Force3D;
 import org.h2gis.utilities.JDBCUtilities;
 import org.h2gis.utilities.TableLocation;
-import org.h2gis.utilities.TableUtilities;
 import org.h2gis.utilities.dbtypes.DBTypes;
 import org.h2gis.utilities.dbtypes.DBUtils;
 import org.h2gis.utilities.jts_utils.Contouring;
@@ -377,7 +376,7 @@ public class IsoSurface {
         GeometryFactory factory = new GeometryFactory(new PrecisionModel(), srid);
         Connection detectionConnection = GeometrySqlHelper.resolveConnection(connection);
         DBTypes dbType = DBUtils.getDBType(detectionConnection);
-        final String periodColumn = aggregateByPeriod ? TableLocation.quoteIdentifier(TableLocation.capsIdentifier("PERIOD", dbType), dbType) : null;
+        final String periodColumn = aggregateByPeriod ? TableLocation.capsIdentifier("PERIOD", dbType) : null;
         if(smooth) {
             Quadtree segmentTree = new Quadtree();
             // Merge triangles and create an index of all segments
@@ -552,7 +551,6 @@ public class IsoSurface {
     public void createTable(Connection connection, String pkField) throws SQLException {
     DBTypes dbType = DBUtils.getDBType(connection.unwrap(Connection.class));
     final String periodField = TableLocation.capsIdentifier("PERIOD", dbType);
-    final String quotedPeriodField = TableLocation.quoteIdentifier(periodField, dbType);
         GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), srid);
         TableLocation pointTableLocation = TableLocation.parse(pointTable, dbType);
         String pointTableName = pointTableLocation.toString(dbType);
@@ -571,7 +569,7 @@ public class IsoSurface {
             createTableQuery.append("CREATE TABLE ").append(TableLocation.parse(outputTable, dbType))
                     .append("(PK SERIAL");
             if(aggregateByPeriod) {
-                createTableQuery.append(", ").append(quotedPeriodField).append(" VARCHAR");
+                createTableQuery.append(", ").append(periodField).append(" VARCHAR");
             }
             createTableQuery.append(", CELL_ID INTEGER, THE_GEOM ")
                     .append(geometryType).append(", ISOLVL INTEGER, ISOLABEL VARCHAR);");
@@ -587,9 +585,9 @@ public class IsoSurface {
                     .append(pointTableName).append(" p3 WHERE t.PK_1 = p1.").append(pkField).append(" and t.PK_2 = p2.")
                     .append(pkField).append(" AND t.PK_3 = p3.").append(pkField);
             if(aggregateByPeriod) {
-                selectQuery.append(" AND p1.").append(quotedPeriodField).append(" = ?")
-                        .append(" AND p1.").append(quotedPeriodField).append(" = p2.").append(quotedPeriodField)
-                        .append(" AND p1.").append(quotedPeriodField).append(" = p3.").append(quotedPeriodField);
+                selectQuery.append(" AND p1.").append(periodField).append(" = ?")
+                        .append(" AND p1.").append(periodField).append(" = p2.").append(periodField)
+                        .append(" AND p1.").append(periodField).append(" = p3.").append(periodField);
             }
             selectQuery.append(" order by cell_id;");
 
@@ -602,11 +600,11 @@ public class IsoSurface {
             } else {
                 StringBuilder distinctPeriodQuery = new StringBuilder()
                         .append("SELECT DISTINCT ")
-                        .append(quotedPeriodField)
+                        .append(periodField)
                         .append(" FROM ")
                         .append(pointTableName)
                         .append(" WHERE ")
-                        .append(quotedPeriodField)
+                        .append(periodField)
                         .append(" IS NOT NULL ORDER BY 1");
                 try (Statement periodStatement = connection.createStatement();
                      ResultSet periodResultSet = periodStatement.executeQuery(distinctPeriodQuery.toString())) {

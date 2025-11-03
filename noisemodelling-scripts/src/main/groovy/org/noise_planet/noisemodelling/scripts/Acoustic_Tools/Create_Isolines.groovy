@@ -332,13 +332,13 @@ def exec(Connection connection, input) {
 
         // Insert only the rows of that PERIOD (here we can build the WHERE as a string)
         String val = p.replace("'", "''") // escapar comillas simples
-        sql.execute("""INSERT INTO "${perTable}"("PERIOD","LEVEL","THE_GEOM")
-                       SELECT "PERIOD","LEVEL","THE_GEOM"
+        sql.execute("""INSERT INTO "${perTable}"(PERIOD,LEVEL,THE_GEOM)
+                       SELECT PERIOD,LEVEL,THE_GEOM
                        FROM "${outTable}"
-                       WHERE "PERIOD" = '${val}'""")
+                       WHERE PERIOD = '${val}'""")
 
         // Spatial index
-        sql.execute("CREATE SPATIAL INDEX ON \"" + perTable + "\"(\"THE_GEOM\")")
+        sql.execute("CREATE SPATIAL INDEX ON \"" + perTable + "\"(THE_GEOM)")
     }
 
     // -------------------

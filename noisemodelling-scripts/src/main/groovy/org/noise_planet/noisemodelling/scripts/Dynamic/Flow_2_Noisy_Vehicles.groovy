@@ -116,11 +116,9 @@ def exec(Connection connection, input) {
     // Get DBTypes for proper table/column name handling
     DBTypes dbType = DBUtils.getDBType(connection)
     
-    // Define column names - use TableLocation.quoteIdentifier WITHOUT dbType to always quote
-    // This ensures PostgreSQL preserves uppercase column names
-    // H2GIS ignores quotes (case-insensitive), so quoting doesn't hurt
-    String periodCol = TableLocation.quoteIdentifier("PERIOD")
-    String idsourceCol = TableLocation.quoteIdentifier("IDSOURCE")
+    // Define column names without quoting - SQL is case-insensitive when not quoted
+    String periodCol = "PERIOD"
+    String idsourceCol = "IDSOURCE"
 
     int duration = 60
     if (input['duration']) {
