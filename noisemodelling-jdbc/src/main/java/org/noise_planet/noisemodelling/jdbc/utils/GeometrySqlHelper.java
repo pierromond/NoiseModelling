@@ -33,6 +33,29 @@ import java.util.Locale;
 
 /**
  * Utility helper for handling geometry parameters across H2GIS and PostGIS databases.
+ * 
+ * <h2>PostgreSQL/PostGIS Usage</h2>
+ * <p>For PostgreSQL connections, always wrap them with {@link PostgisConnectionWrapper} to enable
+ * automatic JTS geometry type conversion. This eliminates manual WKB/WKT parsing:</p>
+ * 
+ * <pre>
+ * Connection rawConnection = DriverManager.getConnection(url, user, password);
+ * Connection connection = new PostgisConnectionWrapper(rawConnection);
+ * 
+ * // Now rs.getObject("geom") returns JTS Geometry directly!
+ * ResultSet rs = connection.createStatement().executeQuery("SELECT geom FROM table");
+ * while (rs.next()) {
+ *     Geometry geom = (Geometry) rs.getObject("geom");  // No conversion needed!
+ * }
+ * </pre>
+ * 
+ * <p>The wrapper uses H2GIS's {@link org.h2gis.postgis_jts.ConnectionWrapper} and configures
+ * PostgreSQL to automatically convert PostGIS geometry types to JTS objects via
+ * {@link org.h2gis.postgis_jts.JtsGeometry} type registration.</p>
+ * 
+ * @see PostgisConnectionWrapper
+ * @see org.h2gis.postgis_jts.ConnectionWrapper
+ * @see org.h2gis.postgis_jts.DataSourceWrapper
  */
 public final class GeometrySqlHelper {
 
@@ -277,11 +300,81 @@ public final class GeometrySqlHelper {
     }
 
     /**
-     * Read a geometry value from a ResultSet column in a database agnostic way.
-     * PostgreSQL returns PGobject which must be converted via WKB.
+     * Simplified geometry retrieval that automatically handles both H2GIS and PostGIS.
+     * 
+     * <p>This is a convenience method that works with both database types. When using
+     * {@link PostgisConnectionWrapper}, PostgreSQL will return JTS Geometry directly without conversion.</p>
+     * 
+     * <h3>Usage</h3>
+     * <pre>
+     * // Simple case - get geometry from first geometry column
+     * Geometry geom = GeometrySqlHelper.getGeometry(rs);
+     * 
+     * // Specify column by name
+     * Geometry geom = GeometrySqlHelper.getGeometry(rs, "the_geom");
+     * 
+     * // Specify column by index
+     * Geometry geom = GeometrySqlHelper.getGeometry(rs, 1);
+     * </pre>
+     * 
+     * @param rs ResultSet positioned at a valid row
+     * @return Geometry from the first geometry column, or null if none found
+     * @throws SQLException If the geometry cannot be read
+     */
+    public static Geometry getGeometry(ResultSet rs) throws SQLException {
+        // Try direct cast first (works with PostgisConnectionWrapper or H2GIS)
+        ResultSetMetaData meta = rs.getMetaData();
+        int columnCount = meta.getColumnCount();
+        for (int i = 1; i <= columnCount; i++) {
+            String typeName = meta.getColumnTypeName(i);
+            if (typeName != null && typeName.toLowerCase(Locale.ROOT).startsWith("geometry")) {
+                return getGeometry(rs, meta.getColumnLabel(i), null);
+            }
+        }
+        throw new SQLException("No geometry column found in ResultSet");
+    }
+    
+    /**
+     * Get geometry by column index (1-based).
+     * 
+     * @param rs ResultSet positioned at a valid row
+     * @param columnIndex Column index (1-based)
+     * @return Geometry value, or null if the column value is NULL
+     * @throws SQLException If the geometry cannot be read
+     */
+    public static Geometry getGeometry(ResultSet rs, int columnIndex) throws SQLException {
+        ResultSetMetaData meta = rs.getMetaData();
+        String columnLabel = meta.getColumnLabel(columnIndex);
+        return getGeometry(rs, columnLabel, null);
+    }
+    
+    /**
+     * Get geometry by column name (simplified, without dbType parameter).
+     * 
+     * <p>This is a convenience method that automatically detects the database type.
+     * When using {@link PostgisConnectionWrapper}, PostgreSQL will return JTS Geometry directly.</p>
+     * 
      * @param rs ResultSet positioned at a valid row
      * @param columnName Name of the geometry column to read
-     * @param dbType Database type
+     * @return Geometry value, or null if the column value is NULL
+     * @throws SQLException If the geometry cannot be read
+     */
+    public static Geometry getGeometry(ResultSet rs, String columnName) throws SQLException {
+        return getGeometry(rs, columnName, null);
+    }
+
+    /**
+     * Read a geometry value from a ResultSet column in a database agnostic way.
+     * 
+     * <p>When using {@link PostgisConnectionWrapper}, PostgreSQL connections are configured to return
+     * JTS Geometry objects directly (via H2GIS's JtsGeometry type registration), eliminating the need
+     * for manual WKB/WKT conversion in most cases.</p>
+     * 
+     * <p>Fallback paths are maintained for compatibility with connections that don't use the wrapper.</p>
+     * 
+     * @param rs ResultSet positioned at a valid row
+     * @param columnName Name of the geometry column to read
+     * @param dbType Database type (can be null)
      * @return Geometry value, or null if the column value is NULL
      * @throws SQLException If the geometry value cannot be read
      */
@@ -291,49 +384,55 @@ public final class GeometrySqlHelper {
             return null;
         }
         
-        // Check if it's already a JTS Geometry (H2GIS)
+        // Primary path: JTS Geometry (H2GIS or PostGIS via PostgisConnectionWrapper)
         if (geomObj instanceof Geometry) {
             return (Geometry) geomObj;
         }
         
-        // Check if it's a net.postgis.jdbc.PGgeometry (PostGIS JDBC extension)
-        // Use reflection to avoid hard dependency on postgis-jdbc
+        // Fallback paths for connections not using PostgisConnectionWrapper
+        
+        // Path 1: net.postgis.jdbc.PGgeometry (old PostGIS JDBC extension - legacy)
         if (geomObj.getClass().getName().equals("net.postgis.jdbc.PGgeometry")) {
-            try {
-                // PGgeometry.getGeometry() returns net.postgis.jdbc.geometry.Geometry
-                // This PostGIS geometry has a getJTSGeometry() method that converts to JTS
-                java.lang.reflect.Method getGeometryMethod = geomObj.getClass().getMethod("getGeometry");
-                Object postgisGeom = getGeometryMethod.invoke(geomObj);
-                
-                if (postgisGeom == null) {
-                    return null;
-                }
-                
-                // Try to use the getJTSGeometry() method if available (newer PostGIS JDBC versions)
-                try {
-                    java.lang.reflect.Method getJTSGeometryMethod = postgisGeom.getClass().getMethod("getJTSGeometry");
-                    return (Geometry) getJTSGeometryMethod.invoke(postgisGeom);
-                } catch (NoSuchMethodException nsme) {
-                    // Fallback: manually convert WKT to JTS
-                    // PostGIS geometry toString() returns "SRID=xxx;WKT" format
-                    // We need to strip the SRID prefix
-                    String wktWithSRID = postgisGeom.toString();
-                    String wkt;
-                    if (wktWithSRID.startsWith("SRID=")) {
-                        int semicolonIndex = wktWithSRID.indexOf(';');
-                        wkt = wktWithSRID.substring(semicolonIndex + 1);
-                    } else {
-                        wkt = wktWithSRID;
-                    }
-                    
-                    return new WKTReader().read(wkt);
-                }
-            } catch (Exception e) {
-                throw new SQLException("Failed to extract geometry from PGgeometry object in column " + columnName, e);
-            }
+            return extractGeometryFromPGgeometry(geomObj, columnName);
         }
         
-        // Otherwise, assume it's PostgreSQL PGobject and parse as WKB
+        // Path 2: PostgreSQL PGobject with WKB hex string (fallback for unconfigured connections)
+        return parseGeometryFromWKB(geomObj, columnName);
+    }
+    
+    /**
+     * Extract JTS Geometry from net.postgis.jdbc.PGgeometry object (legacy PostGIS JDBC).
+     * Uses reflection to avoid compile-time dependency.
+     */
+    private static Geometry extractGeometryFromPGgeometry(Object pgGeometry, String columnName) throws SQLException {
+        try {
+            java.lang.reflect.Method getGeometryMethod = pgGeometry.getClass().getMethod("getGeometry");
+            Object postgisGeom = getGeometryMethod.invoke(pgGeometry);
+            
+            if (postgisGeom == null) {
+                return null;
+            }
+            
+            // Try newer API with direct JTS conversion
+            try {
+                java.lang.reflect.Method getJTSGeometryMethod = postgisGeom.getClass().getMethod("getJTSGeometry");
+                return (Geometry) getJTSGeometryMethod.invoke(postgisGeom);
+            } catch (NoSuchMethodException nsme) {
+                // Fallback: parse WKT from toString()
+                String wktWithSRID = postgisGeom.toString();
+                String wkt = wktWithSRID.startsWith("SRID=") ? 
+                    wktWithSRID.substring(wktWithSRID.indexOf(';') + 1) : wktWithSRID;
+                return new WKTReader().read(wkt);
+            }
+        } catch (Exception e) {
+            throw new SQLException("Failed to extract geometry from PGgeometry in column " + columnName, e);
+        }
+    }
+    
+    /**
+     * Parse JTS Geometry from WKB hex string (fallback for unconfigured PostgreSQL connections).
+     */
+    private static Geometry parseGeometryFromWKB(Object geomObj, String columnName) throws SQLException {
         try {
             String hexWkb = geomObj.toString();
             if (hexWkb == null || hexWkb.isEmpty()) {

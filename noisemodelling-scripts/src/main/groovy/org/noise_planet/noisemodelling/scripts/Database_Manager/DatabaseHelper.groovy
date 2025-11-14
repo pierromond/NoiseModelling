@@ -12,73 +12,16 @@
 
 /**
  * @Author Pierre Aumond, Université Gustave Eiffel
- * Database Helper - Utilities for cross-database compatibility (H2GIS / PostGIS)
+ * Database Helper - Groovy wrapper for cross-database compatibility (H2GIS / PostGIS)
  * 
- * <h2>Overview</h2>
- * This helper class provides a unified API for database operations that work across both H2GIS 
- * (in-memory embedded database) and PostgreSQL with PostGIS extension. It abstracts away the 
- * differences in SQL syntax, metadata handling, and geometry operations between these databases.
+ * <p>Provides Groovy-friendly access to H2GIS utilities (GeometrySqlHelper, GeometryTableUtilities, 
+ * JDBCUtilities) and handles database-specific naming conventions (H2GIS UPPERCASE vs PostgreSQL lowercase).
  * 
- * <h2>Key Design Principles</h2>
- * <ul>
- *   <li><b>Database Detection</b>: Use {@link #isPostgreSQL(Connection)} to detect database type</li>
- *   <li><b>Naming Conventions</b>: H2GIS uses UPPERCASE, PostgreSQL uses lowercase for identifiers</li>
- *   <li><b>Geometry Handling</b>: Different JDBC types (Geometry vs PGobject) require special handling</li>
- *   <li><b>SRID Management</b>: PostgreSQL requires explicit SRID metadata in geometry_columns table</li>
- *   <li><b>Spatial Indexing</b>: H2GIS uses R-tree, PostgreSQL uses GiST</li>
- * </ul>
+ * <p>Most methods delegate to {@link org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper} 
+ * or H2GIS utilities. Use this class from Groovy WPS scripts for simplified database operations.
  * 
- * <h2>Common Usage Patterns</h2>
- * 
- * <h3>1. Table Name Normalization</h3>
- * <pre>
- * // Always normalize table names before using in SQL
- * String normalizedTable = DatabaseHelper.normalizeTableName(connection, "MyTable")
- * // H2GIS: "MYTABLE", PostgreSQL: "mytable"
- * </pre>
- * 
- * <h3>2. SRID Detection and Enforcement</h3>
- * <pre>
- * // Detect SRID from existing geometries
- * int srid = DatabaseHelper.getTableSRID(connection, "buildings", "the_geom")
- * 
- * // Ensure SRID is set correctly (especially after shapefile imports)
- * DatabaseHelper.ensureSRID(connection, "buildings", "the_geom", 2154)
- * </pre>
- * 
- * <h3>3. Spatial Index Creation</h3>
- * <pre>
- * // Creates appropriate index type for each database
- * DatabaseHelper.createSpatialIndex(connection, "buildings", "the_geom")
- * // H2GIS: CREATE SPATIAL INDEX ... ON ...
- * // PostgreSQL: CREATE INDEX ... USING GIST (...)
- * </pre>
- * 
- * <h3>4. Geometry Parameter Handling</h3>
- * <pre>
- * Geometry fence = ... // JTS Geometry with SRID
- * def params = DatabaseHelper.prepareGeometryParameter(connection, fence, "fence")
- * sql.execute("SELECT * FROM buildings WHERE the_geom && ${params.expression}", params.parameters)
- * </pre>
- * 
- * <h3>5. Table Envelope Extraction</h3>
- * <pre>
- * // Works on both databases despite different internal implementations
- * Geometry bbox = DatabaseHelper.getTableEnvelope(connection, "buildings", "the_geom")
- * Envelope env = bbox.getEnvelopeInternal()
- * </pre>
- * 
- * <h2>PostgreSQL-Specific Considerations</h2>
- * <ul>
- *   <li>Shapefile imports may not set SRID metadata properly - always call {@link #ensureSRID}</li>
- *   <li>JDBC returns {@code PGobject} instead of JTS {@code Geometry} - use WKBReader</li>
- *   <li>Geometry column definitions require explicit type and SRID: {@code geometry(Point, 2154)}</li>
- *   <li>PRIMARY KEY constraints have names that must be queried from pg_constraint</li>
- *   <li>Function names differ: {@code RANDOM()} vs {@code RAND()}, {@code SERIAL} vs {@code AUTO_INCREMENT}</li>
- * </ul>
- * 
+ * @see org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper
  * @see org.h2gis.utilities.GeometryTableUtilities
- * @see org.locationtech.jts.geom.Geometry
  */
 
 package org.noise_planet.noisemodelling.wps.Database_Manager
@@ -87,14 +30,14 @@ import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.TableLocation
 import org.h2gis.utilities.dbtypes.DBTypes
+import org.h2gis.utilities.dbtypes.DBUtils
 import org.h2gis.functions.io.shp.SHPRead
 import org.h2.value.ValueBoolean
 import org.locationtech.jts.geom.Geometry
 import org.locationtech.jts.geom.GeometryFactory
 import org.locationtech.jts.geom.Coordinate
 import org.locationtech.jts.geom.Envelope
-import org.locationtech.jts.io.WKBReader
-import org.postgresql.util.PGobject
+import org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper
 
 import java.math.BigDecimal
 
@@ -135,22 +78,21 @@ class DatabaseHelper {
     }
 
     /**
-     * Detect database type from connection
+     * Detect database type from connection (delegates to H2GIS DBUtils)
      * @param connection Database connection
      * @return DBTypes enum (POSTGRESQL or H2GIS)
      */
     static DBTypes getDBType(Connection connection) {
-        String dbProductName = connection.getMetaData().getDatabaseProductName()
-        return dbProductName.toLowerCase().contains("postgresql") ? DBTypes.POSTGRESQL : DBTypes.H2GIS
+        return DBUtils.getDBType(connection)
     }
 
     /**
-     * Check if connection is PostgreSQL
+     * Check if connection is PostgreSQL (delegates to GeometrySqlHelper)
      * @param connection Database connection
      * @return true if PostgreSQL, false otherwise
      */
     static boolean isPostgreSQL(Connection connection) {
-        return getDBType(connection) == DBTypes.POSTGRESQL
+        return GeometrySqlHelper.isPostgreSQL(getDBType(connection))
     }
 
     /**
@@ -184,26 +126,23 @@ class DatabaseHelper {
     }
 
     /**
-     * Normalize table name based on database type.
-     * PostGIS uses lowercase, H2GIS uses uppercase.
+     * Normalize table name based on database type (delegates to TableLocation)
      * @param connection Database connection
      * @param tableName Table name to normalize
      * @return Normalized table name
      */
     static String normalizeTableName(Connection connection, String tableName) {
-        return isPostgreSQL(connection) ? tableName.toLowerCase() : tableName.toUpperCase()
+        return TableLocation.parse(tableName, getDBType(connection)).toString()
     }
 
     /**
-     * Normalize table name according to database conventions
-     * - H2GIS: uppercase
-     * - PostGIS: keep original (will be lowercase when queried)
+     * Normalize table name (backwards compatibility method)
      * @param tableName Original table name
      * @param connection Database connection
      * @return Normalized table name
      */
     static String normalizeTableName(String tableName, Connection connection) {
-        return isPostgreSQL(connection) ? tableName : tableName.toUpperCase()
+        return normalizeTableName(connection, tableName)
     }
 
     /**
@@ -270,94 +209,15 @@ class DatabaseHelper {
     }
 
     /**
-     * Get SRID from table (works for both H2GIS and PostGIS)
+     * Get SRID from table (delegates to GeometrySqlHelper for cross-database compatibility)
      * @param connection Database connection
-     * @param tableName Table name (already normalized)
+     * @param tableName Table name
      * @param geomColumn Geometry column name (default: 'the_geom')
      * @return SRID value
      */
     static int getTableSRID(Connection connection, String tableName, String geomColumn = 'the_geom') {
-        DBTypes dbType = getDBType(connection)
-        if (dbType == DBTypes.POSTGRESQL) {
-            return getPostgresSRID(connection, tableName, geomColumn)
-        } else {
-            return GeometryTableUtilities.getSRID(connection, TableLocation.parse(tableName, dbType))
-        }
-    }
-
-    /**
-     * Get SRID from PostgreSQL table.
-     * Tries geometry_columns metadata first, then falls back to querying actual geometries.
-     * <p>
-     * <b>Implementation Note:</b> This two-step approach is necessary because:
-     * <ol>
-     *   <li>geometry_columns is faster (no table scan) but may be outdated or missing</li>
-     *   <li>Querying actual geometries is slower but always reflects current data</li>
-     * </ol>
-     * 
-     * @param connection PostgreSQL database connection
-     * @param tableName Table name (will be lowercased automatically)
-     * @param geomColumn Geometry column name (will be lowercased automatically)
-     * @return SRID value, or 0 if not found
-     */
-    private static int getPostgresSRID(Connection connection, String tableName, String geomColumn) {
-        def stmt = connection.createStatement()
-        
-        // Step 1: Try geometry_columns metadata (fast, O(1) lookup)
-        int srid = getSRIDFromMetadata(stmt, tableName, geomColumn)
-        
-        // Step 2: Fallback to actual geometry query (slower, requires table scan)
-        if (srid == 0) {
-            srid = getSRIDFromGeometry(stmt, tableName, geomColumn)
-        }
-        
-        stmt.close()
-        return srid
-    }
-
-    /**
-     * Get SRID from PostgreSQL geometry_columns metadata table.
-     * <p>
-     * The geometry_columns table is part of the PostGIS extension and stores metadata about
-     * geometry columns in the database. This is the recommended way to query SRID when available.
-     * 
-     * @param stmt Statement to use for query (reused to avoid creating multiple statements)
-     * @param tableName Table name (lowercase)
-     * @param geomColumn Geometry column name (lowercase)
-     * @return SRID value, or 0 if not found in metadata
-     */
-    private static int getSRIDFromMetadata(def stmt, String tableName, String geomColumn) {
-        def rs = stmt.executeQuery(
-            "SELECT srid FROM geometry_columns " +
-            "WHERE f_table_name = '${tableName.toLowerCase()}' " +
-            "AND f_geometry_column = '${geomColumn.toLowerCase()}' " +
-            "LIMIT 1"
-        )
-        int srid = rs.next() ? rs.getInt("srid") : 0
-        rs.close()
-        return srid
-    }
-
-    /**
-     * Get SRID by querying actual geometry values in PostgreSQL table.
-     * <p>
-     * This is a fallback method when geometry_columns metadata is not available or unreliable.
-     * Uses ST_SRID() PostGIS function to extract SRID from the first non-null geometry.
-     * 
-     * @param stmt Statement to use for query
-     * @param tableName Table name (lowercase)
-     * @param geomColumn Geometry column name (lowercase)
-     * @return SRID value, or 0 if table is empty or has no geometries
-     */
-    private static int getSRIDFromGeometry(def stmt, String tableName, String geomColumn) {
-        def rs = stmt.executeQuery(
-            "SELECT ST_SRID(${geomColumn.toLowerCase()}) as srid " +
-            "FROM ${tableName.toLowerCase()} " +
-            "LIMIT 1"
-        )
-        int srid = rs.next() ? rs.getInt("srid") : 0
-        rs.close()
-        return srid
+        TableLocation tableLocation = TableLocation.parse(tableName, getDBType(connection))
+        return GeometrySqlHelper.getTableSRID(connection, tableLocation, geomColumn)
     }
 
     /**
@@ -395,21 +255,7 @@ class DatabaseHelper {
         }
     }
 
-    /**
-     * Detect SRID from existing geometries in a PostgreSQL table.
-     * <p>
-     * Queries the first non-null geometry to determine its SRID. This is useful when:
-     * <ul>
-     *   <li>Importing shapefiles that don't set PostgreSQL metadata properly</li>
-     *   <li>The targetSRID parameter to {@link #ensureSRID} is 0 (auto-detect)</li>
-     *   <li>Migrating data between databases with different SRID conventions</li>
-     * </ul>
-     * 
-     * @param stmt Statement to use for query (reused for efficiency)
-     * @param tableName Normalized table name (lowercase for PostgreSQL)
-     * @param geomColumn Normalized geometry column name (lowercase for PostgreSQL)
-     * @return SRID value from first geometry, or 0 if no geometries found
-     */
+    /** Detect SRID from first non-null geometry in PostgreSQL table */
     private static int detectSRIDFromTable(def stmt, String tableName, String geomColumn) {
         def query = "SELECT ST_SRID(" + geomColumn + ") as srid " +
             "FROM " + tableName + " " +
@@ -421,24 +267,7 @@ class DatabaseHelper {
         return srid
     }
 
-    /**
-     * Update geometry values in table to have the correct SRID.
-     * <p>
-     * This operation is necessary because:
-     * <ol>
-     *   <li>Shapefile imports often leave geometries with SRID=0</li>
-     *   <li>Some operations require consistent SRID across all geometries</li>
-     *   <li>Spatial joins and indexes work better with proper SRID</li>
-     * </ol>
-     * <p>
-     * <b>Performance Note:</b> This performs a full table update, which can be slow on large tables.
-     * However, it only updates rows where SRID is 0 or different from target, minimizing writes.
-     * 
-     * @param stmt Statement to use for update (reused for efficiency)
-     * @param tableName Normalized table name (lowercase for PostgreSQL)
-     * @param geomColumn Normalized geometry column name (lowercase for PostgreSQL)
-     * @param targetSRID Target SRID value to set on all geometries
-     */
+    /** Update geometry SRID using ST_SetSRID (only updates rows with wrong SRID) */
     private static void updateGeometrySRID(def stmt, String tableName, String geomColumn, int targetSRID) {
         // Use ST_SetSRID to update geometry SRID without reprojecting
         // Only update rows that have wrong SRID to minimize writes
@@ -448,26 +277,7 @@ class DatabaseHelper {
         stmt.execute(updateQuery)
     }
 
-    /**
-     * Update PostgreSQL geometry_columns metadata table with correct SRID.
-     * <p>
-     * The geometry_columns table is a PostGIS system table that stores metadata about geometry
-     * columns. This metadata is used by:
-     * <ul>
-     *   <li>QGIS and other GIS clients to determine coordinate system</li>
-     *   <li>PostGIS spatial functions for optimization</li>
-     *   <li>Database administrators for documentation</li>
-     * </ul>
-     * <p>
-     * <b>Schema Handling:</b> If the connection has an active schema, updates only that schema's
-     * metadata. Otherwise, updates the public schema (or whichever schema contains the table).
-     * 
-     * @param connection Database connection (for schema lookup)
-     * @param stmt Statement to use for update
-     * @param tableName Normalized table name (lowercase for PostgreSQL)
-     * @param geomColumn Normalized geometry column name (lowercase for PostgreSQL)
-     * @param targetSRID Target SRID value to set in metadata
-     */
+    /** Update PostgreSQL geometry_columns metadata table (schema-aware) */
     private static void updateGeometryMetadata(Connection connection, def stmt, String tableName, String geomColumn, int targetSRID) {
         def schema = connection.getSchema()
         def metadataQuery
@@ -490,129 +300,17 @@ class DatabaseHelper {
     }
 
     /**
-     * Get table envelope (bounding box) geometry in a cross-database compatible way.
-     * On PostgreSQL, GeometryTableUtilities.getEnvelope() fails with PGobject cast error.
-     * This method uses ST_Extent() with BOX parsing instead.
+     * Get table envelope (bounding box) - delegates to GeometrySqlHelper
      * @param connection Database connection
      * @param tableName Table name
-     * @param geomColumn Geometry column name (optional, auto-detected)
+     * @param geomColumn Geometry column name (optional, uses first geometry column if null)
      * @return Geometry representing the bounding box (Polygon)
      */
     static Geometry getTableEnvelope(Connection connection, String tableName, String geomColumn = null) {
-        // Auto-detect geometry column name if not provided
-        if (geomColumn == null) {
-            geomColumn = getGeometryColumnName(connection)
-        }
-        
-        if (!isPostgreSQL(connection)) {
-            // H2GIS - use GeometryTableUtilities
-            return GeometryTableUtilities.getEnvelope(
-                connection, 
-                TableLocation.parse(tableName), 
-                geomColumn
-            )
-        } else {
-            // PostgreSQL - use ST_Extent() with BOX parsing
-            return getPostgresTableEnvelope(connection, tableName, geomColumn)
-        }
-    }
-
-    /**
-     * Get table envelope from PostgreSQL using ST_Extent().
-     * <p>
-     * PostgreSQL's ST_Extent() aggregate function returns a BOX string representation of the
-     * bounding box. This method:
-     * <ol>
-     *   <li>Queries ST_Extent() to get aggregated bounding box</li>
-     *   <li>Parses the BOX string format into coordinates</li>
-     *   <li>Constructs a JTS Polygon geometry</li>
-     *   <li>Sets the SRID from table metadata</li>
-     * </ol>
-     * <p>
-     * <b>Why not use GeometryTableUtilities?</b> The H2GIS utility class attempts to cast
-     * PostgreSQL's PGobject to JTS Geometry, which fails. This implementation uses the
-     * text-based ST_Extent() output instead.
-     * 
-     * @param connection PostgreSQL database connection
-     * @param tableName Table name (will be normalized to lowercase)
-     * @param geomColumn Geometry column name (will be normalized to lowercase)
-     * @return Geometry representing the bounding box (Polygon), or null if table is empty
-     */
-    private static Geometry getPostgresTableEnvelope(Connection connection, String tableName, String geomColumn) {
-        def stmt = connection.createStatement()
-        String normalizedTable = tableName.toLowerCase()
-        String normalizedColumn = geomColumn.toLowerCase()
-        
-        // Query ST_Extent() which returns BOX format string
-        def query = "SELECT ST_Extent(" + normalizedColumn + ") as bbox FROM " + normalizedTable
-        def rs = stmt.executeQuery(query)
-        
-        Geometry envelope = null
-        if (rs.next()) {
-            String boxStr = rs.getString("bbox")
-            if (boxStr != null && boxStr.startsWith("BOX")) {
-                // Parse BOX string into Polygon geometry
-                envelope = parsePostgresBOX(boxStr)
-                
-                // Set SRID from table metadata
-                int srid = getTableSRID(connection, normalizedTable, normalizedColumn)
-                if (srid > 0) {
-                    envelope.setSRID(srid)
-                }
-            }
-        }
-        rs.close()
-        stmt.close()
-        
-        return envelope
-    }
-
-    /**
-     * Parse PostgreSQL BOX string into JTS Geometry (Polygon).
-     * <p>
-     * PostgreSQL ST_Extent() returns bounding boxes in BOX format:
-     * <pre>BOX(minx miny,maxx maxy)</pre>
-     * <p>
-     * This method:
-     * <ol>
-     *   <li>Removes "BOX(" prefix and ")" suffix</li>
-     *   <li>Splits coordinates by comma separator</li>
-     *   <li>Parses min/max X and Y values</li>
-     *   <li>Constructs a closed Polygon (5 coordinates)</li>
-     * </ol>
-     * <p>
-     * <b>Coordinate Order:</b> The polygon is created counter-clockwise starting from bottom-left:
-     * (minX, minY) → (maxX, minY) → (maxX, maxY) → (minX, maxY) → (minX, minY)
-     * 
-     * @param boxStr BOX string from PostgreSQL ST_Extent() (e.g., "BOX(0 0,100 100)")
-     * @return Polygon geometry representing the bounding box (SRID not set, must be set by caller)
-     */
-    private static Geometry parsePostgresBOX(String boxStr) {
-        // Remove "BOX(" prefix and ")" suffix
-        String coords = boxStr.substring(4, boxStr.length() - 1)
-        
-        // Split by comma to get min and max points
-        def parts = coords.split(',')
-        def min = parts[0].trim().split(' ')  // "minx miny"
-        def max = parts[1].trim().split(' ')  // "maxx maxy"
-        
-        // Parse coordinate values
-        double minX = Double.parseDouble(min[0])
-        double minY = Double.parseDouble(min[1])
-        double maxX = Double.parseDouble(max[0])
-        double maxY = Double.parseDouble(max[1])
-        
-        // Create Polygon from envelope coordinates (counter-clockwise)
+        TableLocation tableLocation = TableLocation.parse(tableName, getDBType(connection))
+        Envelope env = GeometrySqlHelper.getTableEnvelope(connection, tableLocation)
         GeometryFactory gf = new GeometryFactory()
-        Coordinate[] polyCoords = [
-            new Coordinate(minX, minY),  // Bottom-left
-            new Coordinate(maxX, minY),  // Bottom-right
-            new Coordinate(maxX, maxY),  // Top-right
-            new Coordinate(minX, maxY),  // Top-left
-            new Coordinate(minX, minY)   // Close the ring
-        ] as Coordinate[]
-        
-        return gf.createPolygon(polyCoords)
+        return gf.toGeometry(env)
     }
 
     /**
@@ -621,25 +319,17 @@ class DatabaseHelper {
      * @param tableName Table name (already normalized)
      * @return List of geometry column names (in uppercase)
      */
+    /**
+     * Get geometry column names - delegates to H2GIS utilities
+     * @param connection Database connection
+     * @param tableName Table name
+     * @return List of geometry column names
+     */
     static List<String> getGeometryColumns(Connection connection, String tableName) {
-        DBTypes dbType = getDBType(connection)
-        if (dbType == DBTypes.POSTGRESQL) {
-            List<String> geomFields = []
-            def stmt = connection.createStatement()
-            def rs = stmt.executeQuery(
-                "SELECT f_geometry_column FROM geometry_columns " +
-                "WHERE f_table_name = '${tableName.toLowerCase()}'"
-            )
-            while (rs.next()) {
-                // Normalize to uppercase for consistency with H2GIS
-                geomFields.add(rs.getString("f_geometry_column").toUpperCase())
-            }
-            rs.close()
-            stmt.close()
-            return geomFields
-        } else {
-            return GeometryTableUtilities.getGeometryColumnNames(connection, TableLocation.parse(tableName, dbType))
-        }
+        return GeometryTableUtilities.getGeometryColumnNames(
+            connection, 
+            TableLocation.parse(tableName, getDBType(connection))
+        )
     }
 
     /**
@@ -719,36 +409,10 @@ class DatabaseHelper {
     }
 
     /**
-     * Get SQL for setting SRID on geometry column
-     * @param connection Database connection
-     * @param geomColumn Geometry column name
-     * @param srid SRID value
-     * @return SQL expression to set SRID
-     */
-    static String getSRIDSetExpression(Connection connection, String geomColumn, int srid) {
-        return isPostgreSQL(connection) 
-            ? "ST_SetSRID(${geomColumn}, ${srid})"
-            : "ST_SetSRID(${geomColumn}, ${srid})"
-    }
-
-    /**
-     * Get SQL for geometry type detection
-     * @param connection Database connection
-     * @param geomColumn Geometry column name
-     * @return SQL expression to get geometry type
-     */
-    static String getGeometryTypeExpression(Connection connection, String geomColumn) {
-        return isPostgreSQL(connection)
-            ? "ST_GeometryType(${geomColumn})"
-            : "ST_GeometryType(${geomColumn})"
-    }
-
-    /**
      * Prepare a geometry parameter for use with Groovy Sql named parameters.
-     * Returns an expression fragment and parameters map suited for the connection type.
      * @param connection Database connection
-     * @param geometry Geometry instance (must have SRID set when using PostgreSQL)
-     * @param parameterBase Base name for the parameter (e.g. "fenceGeom")
+     * @param geometry Geometry instance
+     * @param parameterBase Base name for the parameter
      * @return GeometryParameter containing SQL expression and parameter map
      */
     static GeometryParameter prepareGeometryParameter(Connection connection, Geometry geometry, String parameterBase) {
@@ -758,10 +422,9 @@ class DatabaseHelper {
         }
 
         if (isPostgreSQL(connection)) {
-            int srid = geometry.getSRID()
-            result.expression = "ST_SetSRID(ST_GeomFromText(:${parameterBase}Wkt), :${parameterBase}Srid)"
+            result.expression = "ST_GeomFromText(:${parameterBase}Wkt, :${parameterBase}Srid)"
             result.parameters[(parameterBase + 'Wkt')] = geometry.toText()
-            result.parameters[(parameterBase + 'Srid')] = srid
+            result.parameters[(parameterBase + 'Srid')] = geometry.getSRID()
         } else {
             result.expression = ":${parameterBase}"
             result.parameters[parameterBase] = geometry
@@ -770,37 +433,14 @@ class DatabaseHelper {
     }
 
     /**
-     * Read geometry from a ResultSet in a cross-database manner.
+     * Read geometry from a ResultSet - delegates to GeometrySqlHelper
      * @param connection Database connection
      * @param rs ResultSet positioned on a row
-     * @param columnName Column name to read (logical name)
+     * @param columnName Column name to read
      * @return Geometry instance or null if column is null
      */
     static Geometry getGeometryFromResultSet(Connection connection, ResultSet rs, String columnName) {
-        String resultSetColumn = normalizeResultSetColumnName(connection, columnName)
-        Object geomObj = rs.getObject(resultSetColumn)
-        if (geomObj == null) {
-            return null
-        }
-
-        if (geomObj instanceof Geometry) {
-            return geomObj as Geometry
-        }
-
-        if (isPostgreSQL(connection)) {
-            String hexValue
-            if (geomObj instanceof PGobject) {
-                hexValue = ((PGobject) geomObj).getValue()
-            } else {
-                hexValue = geomObj.toString()
-            }
-            if (!hexValue) {
-                return null
-            }
-            return new WKBReader().read(hexValue.decodeHex())
-        }
-
-        throw new IllegalArgumentException("Unsupported geometry object type: " + geomObj.getClass().getName())
+        return GeometrySqlHelper.getGeometry(rs, columnName, getDBType(connection))
     }
 
     /**

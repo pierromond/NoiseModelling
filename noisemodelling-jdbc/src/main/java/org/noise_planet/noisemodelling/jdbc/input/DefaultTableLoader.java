@@ -332,8 +332,8 @@ public class DefaultTableLoader implements NoiseMapByReceiverMaker.TableLoader {
                     } else {
                         skipReceivers.add(receiverPk);
                     }
-                    Geometry pt = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(
-                            rs, receiverGeomName, dbType);
+                    // With PostgisConnectionWrapper, PostgreSQL returns JTS Geometry directly
+                    Geometry pt = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(rs, receiverGeomName);
                     if(pt != null && !pt.isEmpty()) {
                         if(pt.getCoordinate().getZ() == Coordinate.NULL_ORDINATE) {
                             throw new IllegalArgumentException("The table " + receiverTableName +
@@ -536,7 +536,7 @@ public class DefaultTableLoader implements NoiseMapByReceiverMaker.TableLoader {
                 double oldAlpha = buildingTableParameters.defaultWallAbsorption;
                 while (rs.next()) {
                     //if we don't have height of building
-                    Geometry building = GeometrySqlHelper.getGeometry(rs, buildingGeomName, dbType);
+                    Geometry building = GeometrySqlHelper.getGeometry(rs, buildingGeomName);
                     if(building != null) {
                         Geometry intersectedGeometry = null;
                         try {
@@ -665,8 +665,7 @@ public class DefaultTableLoader implements NoiseMapByReceiverMaker.TableLoader {
             org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.setGeometryParameter(st, 1, demEnvelope, dbType);
                 try (SpatialResultSet rs = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.unwrapSpatialResultSet(st.executeQuery(), dbType)) {
                     while (rs.next()) {
-                        Geometry pt = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(
-                                rs, topoGeomName, dbType);
+                        Geometry pt = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(rs, topoGeomName);
                         if(pt != null) {
                             Coordinate ptCoordinate = pt.getCoordinate();
                             profileBuilder.addTopographicPoint(ptCoordinate);
@@ -721,8 +720,7 @@ public class DefaultTableLoader implements NoiseMapByReceiverMaker.TableLoader {
             org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.setGeometryParameter(st, 1, soilEnvelope, dbType);
                 try (SpatialResultSet rs = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.unwrapSpatialResultSet(st.executeQuery(), dbType)) {
                     while (rs.next()) {
-                        Geometry mainPolygon = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(
-                                rs, soilGeomName, dbType);
+                        Geometry mainPolygon = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(rs, soilGeomName);
                         if(mainPolygon != null) {
                             for (int idPoly = 0; idPoly < mainPolygon.getNumGeometries(); idPoly++) {
                                 Geometry poly = mainPolygon.getGeometryN(idPoly);
@@ -806,8 +804,7 @@ public class DefaultTableLoader implements NoiseMapByReceiverMaker.TableLoader {
                 boolean loggedSourceDebug = false;
                 while (rs.next()) {
                     sourceRowCount++;
-                    Geometry geo = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(
-                            rs, sourceGeomName, dbType);
+                    Geometry geo = org.noise_planet.noisemodelling.jdbc.utils.GeometrySqlHelper.getGeometry(rs, sourceGeomName);
                     if (geo != null) {
                         if (doIntersection) {
                             geo = domainConstraint.intersection(geo);

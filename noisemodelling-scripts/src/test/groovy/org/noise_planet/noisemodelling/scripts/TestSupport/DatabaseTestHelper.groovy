@@ -16,6 +16,7 @@ package org.noise_planet.noisemodelling.scripts.TestSupport
 
 import groovy.sql.Sql
 import org.h2gis.functions.factory.H2GISDBFactory
+import org.noise_planet.noisemodelling.jdbc.utils.PostgisConnectionWrapper
 import org.testcontainers.containers.PostgreSQLContainer
 import org.testcontainers.utility.DockerImageName
 import org.slf4j.Logger
@@ -88,8 +89,9 @@ class DatabaseTestHelper {
             }
         }
         
-        // Connect to PostgreSQL
-        Connection connection = postgreSQLContainer.createConnection("")
+        // Connect to PostgreSQL and wrap with H2GIS PostGIS wrapper for JTS geometry support
+        Connection rawConnection = postgreSQLContainer.createConnection("")
+        Connection connection = new PostgisConnectionWrapper(rawConnection)
         
         // Create unique schema for this test
         String schemaName = identifier ? 
@@ -155,7 +157,10 @@ class DatabaseTestHelper {
         
         try {
             Class.forName("org.postgresql.Driver")
-            Connection connection = java.sql.DriverManager.getConnection(jdbcUrl, user, password)
+            Connection rawConnection = java.sql.DriverManager.getConnection(jdbcUrl, user, password)
+            
+            // Wrap with H2GIS PostGIS wrapper for JTS geometry support
+            Connection connection = new PostgisConnectionWrapper(rawConnection)
             
             // Create unique schema
             String schemaName = identifier ? 
