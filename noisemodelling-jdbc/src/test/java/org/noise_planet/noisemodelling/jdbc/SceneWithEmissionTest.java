@@ -27,6 +27,9 @@ import org.noise_planet.noisemodelling.pathfinder.utils.AcousticIndicatorsFuncti
 import org.noise_planet.noisemodelling.propagation.AttenuationParameters;
 import org.noise_planet.noisemodelling.propagation.ReceiverNoiseLevel;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -41,6 +44,7 @@ import static org.noise_planet.noisemodelling.pathfinder.utils.AcousticIndicator
  * Test class evaluation and testing attenuation values.
  */
 public class SceneWithEmissionTest {
+    private static final Logger LOGGER = LoggerFactory.getLogger(SceneWithEmissionTest.class);
     private static final double HUMIDITY = 70;
     private static final double TEMPERATURE = 10;
     private List<Long> testIgnoreNonSignificantSourcesParam(Connection connection, double maxError) throws SQLException, IOException {
@@ -233,7 +237,266 @@ public class SceneWithEmissionTest {
         }
     }
 
+    /**
+     * Comparison: line source (500 m) vs discretized point sources (1 m spacing).
+     * Free-field, no buildings, no ground effects, flat spectrum.
+     * The difference at each receiver should be less than 1 dB per frequency band.
+     */
+    @Test
+    public void testLongLineSourceVsDiscretePoints() throws ParseException {
 
+        GeometryFactory factory = new GeometryFactory();
+
+        // 500 m horizontal line source at height 0.05 m
+        double cx = 250.0;
+        double cy = 0.0;
+        double halfLen = 250.0;
+        double x1 = cx - halfLen;
+        double x2 = cx + halfLen;
+
+        WKTReader wktReader = new WKTReader(factory);
+        LineString lineSource = (LineString) wktReader.read(
+                "LINESTRING (" + x1 + " " + cy + " 0.05, " + x2 + " " + cy + " 0.05)");
+
+        // Free-field: no buildings, no ground effect
+        ProfileBuilder builder = new ProfileBuilder();
+        builder.finishFeeding();
+
+        // Flat spectrum: 73.037 dB per octave band (in watts)
+        double lwOctDb = 73.037;
+        double[] roadLvl = new double[8];
+        for (int i = 0; i < 8; i++) {
+            roadLvl[i] = AcousticIndicatorsFunctions.dBToW(lwOctDb);
+        }
+
+        // Receivers at various distances and angles from mid-point of the line
+        // Angles relative to the line direction: 0° = along line, 45° = diagonal, 90° = perpendicular
+        double[] receiverDistances = {10, 50, 100, 200, 400};
+        double[] receiverAngles = {0, 45, 90}; // degrees
+
+        // === RUN 1: Discretized point sources at 1 m spacing ===
+        SceneWithEmission scenePoints = new SceneWithEmission(builder);
+        List<String> receiverLabels = new ArrayList<>();
+        for (double angleDeg : receiverAngles) {
+            double angleRad = Math.toRadians(angleDeg);
+            for (double dist : receiverDistances) {
+                double rx = cx + dist * Math.cos(angleRad);
+                double ry = cy + dist * Math.sin(angleRad);
+                scenePoints.addReceiver(new Coordinate(rx, ry, 4.0));
+                receiverLabels.add(String.format("d=%dm, angle=%d°", (int) dist, (int) angleDeg));
+            }
+        }
+
+        List<Coordinate> srcPts = new ArrayList<>();
+        PathFinder.splitLineStringIntoPoints(lineSource, 1.0, srcPts);
+        for (int i = 0; i < srcPts.size(); i++) {
+            scenePoints.addSource((long) i, factory.createPoint(srcPts.get(i)));
+            scenePoints.addSourceEmission((long) i, "", roadLvl);
+        }
+
+        scenePoints.setComputeHorizontalDiffraction(false);
+        scenePoints.setComputeVerticalDiffraction(false);
+        scenePoints.setReflexionOrder(0);
+        scenePoints.maxSrcDist = 800;
+
+        scenePoints.defaultCnossosParameters.setHumidity(70);
+        scenePoints.defaultCnossosParameters.setTemperature(15);
+
+        AttenuationOutputMultiThread outPoints = new AttenuationOutputMultiThread(scenePoints);
+        PathFinder computeRays = new PathFinder(scenePoints);
+        computeRays.setThreadCount(1);
+        computeRays.run(outPoints);
+
+        // === RUN 2: Single line source ===
+        scenePoints.clearSources();
+        scenePoints.addSource(1L, lineSource);
+        scenePoints.addSourceEmission(1L, "", roadLvl);
+
+        AttenuationOutputMultiThread outLine = new AttenuationOutputMultiThread(scenePoints);
+        computeRays.run(outLine);
+
+        // === Compare results ===
+        List<ReceiverNoiseLevel> pointLevels = new ArrayList<>(outPoints.resultsCache.receiverLevels);
+        List<ReceiverNoiseLevel> lineLevels = new ArrayList<>(outLine.resultsCache.receiverLevels);
+
+        int expectedCount = receiverDistances.length * receiverAngles.length;
+        assertEquals(expectedCount, pointLevels.size(),
+                "Expected one result per receiver (points)");
+        assertEquals(expectedCount, lineLevels.size(),
+                "Expected one result per receiver (line)");
+
+        for (int i = 0; i < pointLevels.size(); i++) {
+            double globalPoints = AcousticIndicatorsFunctions.sumDbArray(pointLevels.get(i).levels);
+            double globalLine   = AcousticIndicatorsFunctions.sumDbArray(lineLevels.get(i).levels);
+            double diff = Math.abs(globalPoints - globalLine);
+            LOGGER.info("Receiver {} ({}): points={} dB, line={} dB, diff={} dB",
+                    i, receiverLabels.get(i), String.format("%.2f", globalPoints),
+                    String.format("%.2f", globalLine), String.format("%.2f", diff));
+            assertTrue(diff < 1.0,
+                    "Difference between line and point sources at receiver " + i +
+                    " (" + receiverLabels.get(i) + ") is " + String.format("%.2f", diff) + " dB, expected < 1 dB");
+        }
+    }
+
+    /**
+     * Faithful reproduction of TestLineVsPoints.groovy:
+     * Single line source (500 m) vs discretized point sources (1 m and 10 m spacing).
+     * Same cx/cy, same spectrum (73.037 dB octave, 71.276 dB at 8 kHz), same propagation parameters.
+     * Free-field, no buildings, no ground effects. Receivers at 0°, 45°, 90° angles.
+     * All three runs should agree within 1 dB at each receiver.
+     */
+    @Test
+    public void testLineVsDiscretePoints_GroovyReference() throws ParseException {
+
+        GeometryFactory factory = new GeometryFactory();
+
+        // Line source geometry — same as Groovy reference
+        double cx = 663287.0;
+        double cy = 6855632.0;
+        double halfLen = 250.0;  // 500 m total
+        double x1 = cx - halfLen;
+        double x2 = cx + halfLen;
+
+        WKTReader wktReader = new WKTReader(factory);
+        LineString lineSource = (LineString) wktReader.read(
+                "LINESTRING (" + x1 + " " + cy + " 0.05, " + x2 + " " + cy + " 0.05)");
+
+        // Spectrum per meter: flat 73.037 dB/octave, 71.276 dB at 8 kHz
+        double lwOctDb = 73.037;
+        double lw8kDb  = 71.276;
+
+        // Free-field: no buildings, no ground effect
+        ProfileBuilder builder = new ProfileBuilder();
+        builder.finishFeeding();
+
+        // Power in watts for the line source and 1 m point sources (dx=1 → +0 dB)
+        double[] roadLvl = new double[] {
+                AcousticIndicatorsFunctions.dBToW(lwOctDb),
+                AcousticIndicatorsFunctions.dBToW(lwOctDb),
+                AcousticIndicatorsFunctions.dBToW(lwOctDb),
+                AcousticIndicatorsFunctions.dBToW(lwOctDb),
+                AcousticIndicatorsFunctions.dBToW(lwOctDb),
+                AcousticIndicatorsFunctions.dBToW(lwOctDb),
+                AcousticIndicatorsFunctions.dBToW(lwOctDb),
+                AcousticIndicatorsFunctions.dBToW(lw8kDb)
+        };
+
+        // Receivers at various distances and angles from mid-point
+        double[] receiverDistances = {10, 50, 100, 200, 400};
+        double[] receiverAngles = {0, 45, 90}; // degrees
+
+        // --- Setup scene (reused across runs via clearSources) ---
+        SceneWithEmission scene = new SceneWithEmission(builder);
+        List<String> receiverLabels = new ArrayList<>();
+        for (double angleDeg : receiverAngles) {
+            double angleRad = Math.toRadians(angleDeg);
+            for (double dist : receiverDistances) {
+                double rx = cx + dist * Math.cos(angleRad);
+                double ry = cy + dist * Math.sin(angleRad);
+                scene.addReceiver(new Coordinate(rx, ry, 4.0));
+                receiverLabels.add(String.format("d=%dm, angle=%d°", (int) dist, (int) angleDeg));
+            }
+        }
+        scene.setComputeHorizontalDiffraction(false);
+        scene.setComputeVerticalDiffraction(false);
+        scene.setReflexionOrder(0);
+        scene.maxSrcDist = 800;
+        scene.maxRefDist = 400;
+        scene.defaultCnossosParameters.setHumidity(70);
+        scene.defaultCnossosParameters.setTemperature(15);
+
+        PathFinder pathFinder = new PathFinder(scene);
+        pathFinder.setThreadCount(1);
+
+        // ============================================================
+        // RUN 1 — Single line source
+        // ============================================================
+        scene.addSource(1L, lineSource);
+        scene.addSourceEmission(1L, "", roadLvl);
+
+        AttenuationOutputMultiThread outLine = new AttenuationOutputMultiThread(scene);
+        pathFinder.run(outLine);
+
+        // ============================================================
+        // RUN 2 — Discretized point sources every 1 m
+        //         Using splitLineStringIntoPoints (midpoints of segments, like PathFinder internals)
+        // ============================================================
+        scene.clearSources();
+        List<Coordinate> srcPts1m = new ArrayList<>();
+        double li1m = PathFinder.splitLineStringIntoPoints(lineSource, 1.0, srcPts1m);
+        LOGGER.info("1m discretization: {} points, li = {} m", srcPts1m.size(), String.format("%.2f", li1m));
+        for (int i = 0; i < srcPts1m.size(); i++) {
+            scene.addSource((long) (i + 1), factory.createPoint(srcPts1m.get(i)));
+            scene.addSourceEmission((long) (i + 1), "", roadLvl);
+        }
+
+        AttenuationOutputMultiThread outPts1m = new AttenuationOutputMultiThread(scene);
+        pathFinder.run(outPts1m);
+
+        // ============================================================
+        // RUN 3 — Discretized point sources every 10 m
+        //         LW_point = LW/m * li  (in watts)
+        // ============================================================
+        scene.clearSources();
+        List<Coordinate> srcPts10m = new ArrayList<>();
+        double li10m = PathFinder.splitLineStringIntoPoints(lineSource, 10.0, srcPts10m);
+        double lwOct10Db = lwOctDb + 10.0 * Math.log10(li10m);
+        double lw8k10Db  = lw8kDb  + 10.0 * Math.log10(li10m);
+        LOGGER.info("10m discretization: {} points, li = {} m, lwOct = {} dB",
+                srcPts10m.size(), String.format("%.2f", li10m), String.format("%.2f", lwOct10Db));
+        double[] roadLvl10m = new double[] {
+                AcousticIndicatorsFunctions.dBToW(lwOct10Db),
+                AcousticIndicatorsFunctions.dBToW(lwOct10Db),
+                AcousticIndicatorsFunctions.dBToW(lwOct10Db),
+                AcousticIndicatorsFunctions.dBToW(lwOct10Db),
+                AcousticIndicatorsFunctions.dBToW(lwOct10Db),
+                AcousticIndicatorsFunctions.dBToW(lwOct10Db),
+                AcousticIndicatorsFunctions.dBToW(lwOct10Db),
+                AcousticIndicatorsFunctions.dBToW(lw8k10Db)
+        };
+        for (int i = 0; i < srcPts10m.size(); i++) {
+            scene.addSource((long) (i + 1), factory.createPoint(srcPts10m.get(i)));
+            scene.addSourceEmission((long) (i + 1), "", roadLvl10m);
+        }
+
+        AttenuationOutputMultiThread outPts10m = new AttenuationOutputMultiThread(scene);
+        pathFinder.run(outPts10m);
+
+        // ============================================================
+        // Compare results
+        // ============================================================
+        List<ReceiverNoiseLevel> lineLevels   = new ArrayList<>(outLine.resultsCache.receiverLevels);
+        List<ReceiverNoiseLevel> pts1mLevels  = new ArrayList<>(outPts1m.resultsCache.receiverLevels);
+        List<ReceiverNoiseLevel> pts10mLevels = new ArrayList<>(outPts10m.resultsCache.receiverLevels);
+
+        int expectedCount = receiverDistances.length * receiverAngles.length;
+        assertEquals(expectedCount, lineLevels.size());
+        assertEquals(expectedCount, pts1mLevels.size());
+        assertEquals(expectedCount, pts10mLevels.size());
+
+        LOGGER.info("=== Line vs Points 1m vs Points 10m ===");
+        for (int i = 0; i < expectedCount; i++) {
+            double dbLine   = AcousticIndicatorsFunctions.sumDbArray(lineLevels.get(i).levels);
+            double dbPts1m  = AcousticIndicatorsFunctions.sumDbArray(pts1mLevels.get(i).levels);
+            double dbPts10m = AcousticIndicatorsFunctions.sumDbArray(pts10mLevels.get(i).levels);
+
+            double diffLineVsPts1m  = Math.abs(dbLine - dbPts1m);
+            double diffLineVsPts10m = Math.abs(dbLine - dbPts10m);
+
+            LOGGER.info("Receiver {} ({}): line={} dB, pts1m={} dB (diff={}), pts10m={} dB (diff={})",
+                    i, receiverLabels.get(i),
+                    String.format("%.2f", dbLine),
+                    String.format("%.2f", dbPts1m),  String.format("%.2f", diffLineVsPts1m),
+                    String.format("%.2f", dbPts10m), String.format("%.2f", diffLineVsPts10m));
+
+            assertTrue(diffLineVsPts1m < 1.0,
+                    "Line vs Points(1m) at receiver " + i + " (" + receiverLabels.get(i) +
+                    "): diff=" + String.format("%.2f", diffLineVsPts1m) + " dB, expected < 1 dB");
+            assertTrue(diffLineVsPts10m < 1.0,
+                    "Line vs Points(10m) at receiver " + i + " (" + receiverLabels.get(i) +
+                    "): diff=" + String.format("%.2f", diffLineVsPts10m) + " dB, expected < 1 dB");
+        }
+    }
 
     /**
      * Test of convergence of power at receiver when increasing the reflection order
