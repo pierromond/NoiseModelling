@@ -18,13 +18,14 @@
 
 package org.noise_planet.noisemodelling.scripts.Geometric_Tools
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureSpatialIndex
+
 import groovy.sql.Sql
 import groovy.text.SimpleTemplateEngine
 import groovy.transform.CompileStatic
 import org.h2.util.ScriptReader
 import org.h2gis.api.ProgressVisitor
 import org.h2gis.utilities.GeometryTableUtilities
-import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.TableLocation
 import org.noise_planet.noisemodelling.pathfinder.utils.profiler.RootProgressVisitor
 import org.slf4j.Logger
@@ -193,6 +194,8 @@ def exec(Connection connection, input) {
     logger.info('Start enrich the DEM')
 
     def sql = new Sql(connection)
+
+    ensureSpatialIndex(connection, logger, inputRoad)
 
     def import_roads = """
     ------------

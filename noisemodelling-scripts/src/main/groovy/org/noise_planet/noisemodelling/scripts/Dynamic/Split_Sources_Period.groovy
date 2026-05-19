@@ -12,6 +12,8 @@
 
 package org.noise_planet.noisemodelling.scripts.Dynamic
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureIndex
+
 
 import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.JDBCUtilities
@@ -77,11 +79,6 @@ outputs = [
     ]
 ]
 
-
-
-
-
-
 // main function of the script
 def exec(Connection connection, Map input) {
 
@@ -116,6 +113,8 @@ def exec(Connection connection, Map input) {
     int sridSources = GeometryTableUtilities.getSRID(connection, TableLocation.parse(tableSourceDynamic, dbType))
     if (!DataBaseUtilities.isSridMetric(connection, sridSources)) throw new IllegalArgumentException("Error : Please use a metric projection for "+tableSourceDynamic+".")
     if (sridSources == 0) throw new IllegalArgumentException("Error : The table "+tableSourceDynamic+" does not have an associated SRID.")
+
+        ensureIndex(connection, sql, logger, tableSourceDynamic, sourceIndexFieldName)
 
     def columnNames = JDBCUtilities.getColumnNames(connection, tableSourceDynamic)
     columnNames.remove(TableLocation.capsIdentifier("THE_GEOM", dbType))

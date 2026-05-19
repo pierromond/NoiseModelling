@@ -16,6 +16,8 @@
 
 package org.noise_planet.noisemodelling.scripts.Data_Assimilation
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureIndex
+
 import groovy.sql.Sql
 import groovy.transform.CompileStatic
 import org.h2gis.utilities.wrapper.ConnectionWrapper
@@ -57,6 +59,9 @@ static def exec(Connection connection,inputs){
     String bestConfig = inputs["bestConfig"] as String
     String roadEmission = inputs["roadEmission"] as String
     Sql sql = new Sql(connection)
+
+        ensureIndex(connection, sql, logger, roadEmission, "PERIOD")
+        ensureIndex(connection, sql, logger, bestConfig, "IT")
 
     sql.execute("DROP TABLE LW_ROADS_best IF EXISTS")
     // Create the DYNAMIC_ROADS table and populate it with dynamic road data by varying the traffic with the best configuration.

@@ -18,6 +18,8 @@
 
 package org.noise_planet.noisemodelling.scripts.Geometric_Tools
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureSpatialIndex
+
 import groovy.sql.Sql
 import groovy.text.SimpleTemplateEngine
 import groovy.transform.CompileStatic
@@ -225,6 +227,8 @@ def exec(Connection connection, input) {
     logger.info('Start enrich the DEM')
 
     def sql = new Sql(connection)
+
+    ensureSpatialIndex(connection, logger, inputLine)
 
 
     def import_dem_without_source = """

@@ -17,6 +17,8 @@
 
 package org.noise_planet.noisemodelling.scripts.Receivers
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureSpatialIndex
+
 import groovy.sql.Sql
 import groovy.transform.CompileStatic
 import org.h2gis.functions.spatial.crs.ST_SetSRID
@@ -164,6 +166,8 @@ def exec(Connection connection, Map input) {
         targetSrid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(sources_table_name))
     }
 
+    ensureSpatialIndex(connection, logger, building_table_name)
+
     Geometry fenceGeom = null
     if (input['fence']) {
         if (targetSrid != 0) {
@@ -251,7 +255,7 @@ def exec(Connection connection, Map input) {
         if (input['sourcesTableName']) {
             // Delete receivers near sources
             logger.info('Delete receivers near sources...')
-            sql.execute("CREATE SPATIAL INDEX ON " + sources_table_name + "(the_geom);")
+            ensureSpatialIndex(connection, logger, sources_table_name)
             sql.execute("DELETE FROM " + receivers_table_name + " g WHERE exists  " +
                             "(SELECT 1 FROM " + sources_table_name + " r  " +
                                 "WHERE st_expand(g.the_geom, 1, 1) && r.the_geom and st_distance(g.the_geom, r.the_geom) < 1 limit 1);")
@@ -277,7 +281,7 @@ def exec(Connection connection, Map input) {
         if (input['sourcesTableName']) {
             // Delete receivers near sources
             logger.info('Delete receivers near sources...')
-            sql.execute("CREATE SPATIAL INDEX ON " + sources_table_name + "(the_geom);")
+            ensureSpatialIndex(connection, logger, sources_table_name)
             sql.execute("DELETE FROM tmp_receivers g WHERE exists " +
                             "(SELECT 1 FROM " + sources_table_name + " r " +
                                 "WHERE st_expand(g.the_geom, 1, 1) && r.the_geom and st_distance(g.the_geom, r.the_geom) < 1 limit 1);")

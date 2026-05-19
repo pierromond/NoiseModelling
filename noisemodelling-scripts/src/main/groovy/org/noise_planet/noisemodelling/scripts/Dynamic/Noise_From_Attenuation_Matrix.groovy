@@ -16,6 +16,8 @@
 
 package org.noise_planet.noisemodelling.scripts.Dynamic
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureIndex
+
 
 import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.TableLocation
@@ -75,11 +77,6 @@ outputs = [
     ]
 ]
 
-
-
-
-
-
 // main function of the script
 def exec(Connection connection, input) {
 
@@ -129,6 +126,9 @@ def exec(Connection connection, input) {
         ALTER TABLE $outputTable ADD COLUMN LEQ float as 10*log10((power(10,(${prefix}63)/10)+power(10,(${prefix}125)/10)+power(10,(${prefix}250)/10)+power(10,(${prefix}500)/10)+power(10,(${prefix}1000)/10)+power(10,(${prefix}2000)/10)+power(10,(${prefix}4000)/10)+power(10,(${prefix}8000)/10)));
         CREATE UNIQUE INDEX ON $outputTable (IDRECEIVER, $timeString);
     /$
+
+        ensureIndex(connection, sql, logger, attenuationTable, "IDSOURCE")
+        ensureIndex(connection, sql, logger, lwTable, lwTable_sourceId)
 
     sql.execute(query2.toString())
 

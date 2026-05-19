@@ -21,8 +21,8 @@ import groovy.transform.CompileStatic
 import org.h2gis.utilities.wrapper.ConnectionWrapper
 import java.sql.Connection
 
-title = 'Merged Sensors and Receivers'
-description = 'Merges sensor locations into an existing RECEIVERS table previously created with a regular grid.'
+title = 'Merge Sensors and Receivers'
+description = 'Merge sensor locations into an existing RECEIVERS table previously created with a regular grid.'
 inputs = [
         tableReceivers: [
                 name: 'The receiver table',

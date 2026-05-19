@@ -17,8 +17,9 @@
 
 package org.noise_planet.noisemodelling.scripts.Geometric_Tools
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureSpatialIndex
+
 import groovy.sql.Sql
-import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.GeometryTableUtilities
 import org.noise_planet.noisemodelling.jdbc.utils.DataBaseUtilities
 import org.h2gis.utilities.TableLocation
@@ -115,10 +116,14 @@ def exec(Connection connection, input) {
 
     if (sridBuildings != sridScreens) throw new IllegalArgumentException("Error : The SRID of table screens and buildings are not the same.")
 
+        ensureSpatialIndex(connection, logger, screen_table_name)
+        if (building_table_name) {
+                ensureSpatialIndex(connection, logger, building_table_name)
+        }
+
     // Check for intersections between walls
     int intersectingWalls = sql.firstRow("select count(*) interswalls from " + screen_table_name + " E1, " + screen_table_name + " E2 where E1.pk < E2.pk AND ST_Distance(E1.the_geom, E2.the_geom) < " + distance_truncate_screens + ";")[0] as Integer
     if (intersectingWalls > 0) {
-        sql.execute("CREATE SPATIAL INDEX IF NOT EXISTS SCREEN_INDEX ON " + screen_table_name + "(the_geom)")
         sql.execute("drop table if exists tmp_relation_screen_screen")
         sql.execute("create table tmp_relation_screen_screen as select s1.pk as PK_SCREEN, S2.PK as PK2_SCREEN FROM " + screen_table_name + " S1, " + screen_table_name + " S2 WHERE S1.PK < S2.PK AND S1.THE_GEOM && S2.THE_GEOM AND ST_DISTANCE(S1.THE_GEOM, S2.THE_GEOM) <= " + distance_truncate_screens)
         sql.execute("drop table if exists tmp_screen_truncated")
@@ -132,7 +137,6 @@ def exec(Connection connection, input) {
 
         // Remove parts of the screen too close from buildings
         // Find screen intersecting buildings
-        sql.execute("CREATE SPATIAL INDEX IF NOT EXISTS SCREEN_INDEX ON " + screen_table_name + "(the_geom)")
         sql.execute("drop table if exists tmp_relation_screen_building;")
         sql.execute("create table tmp_relation_screen_building as select b.pk as PK_building, s.pk as pk_screen" +
                 " from " + building_table_name + " b, " + screen_table_name + " s where b.the_geom && s.the_geom and" +

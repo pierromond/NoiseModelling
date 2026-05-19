@@ -17,6 +17,8 @@
 
 package org.noise_planet.noisemodelling.scripts.Receivers
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureSpatialIndex
+
 import org.h2gis.functions.spatial.crs.ST_SetSRID
 import org.h2gis.functions.spatial.crs.ST_Transform
 import org.h2gis.utilities.GeometryTableUtilities
@@ -115,7 +117,6 @@ outputs = [
         ]
 ]
 
-
 def exec(connection, Map input) {
 
     Sql sql = new Sql(connection)
@@ -204,10 +205,12 @@ def exec(connection, Map input) {
     }
 
     if (input['buildingTableName']) {
+        ensureSpatialIndex(connection, logger, building_table_name)
         logger.info("Delete receivers inside buildings")
         sql.execute("delete from " + receivers_table_name + " g where exists (select 1 from " + building_table_name + " b where ST_Z(g.the_geom) < b.HEIGHT and g.the_geom && b.the_geom and ST_INTERSECTS(g.the_geom, b.the_geom) and ST_distance(b.the_geom, g.the_geom) < 1 limit 1);")
     }
     if (input['sourcesTableName']) {
+        ensureSpatialIndex(connection, logger, sources_table_name)
         logger.info("Delete receivers near sources")
         sql.execute("delete from " + receivers_table_name + " g where exists (select 1 from " + sources_table_name + " r where st_expand(g.the_geom, 1) && r.the_geom and st_distance(g.the_geom, r.the_geom) < 1 limit 1);")
     }

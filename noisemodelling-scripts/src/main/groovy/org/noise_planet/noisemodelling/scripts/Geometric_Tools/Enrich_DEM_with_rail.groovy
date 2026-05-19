@@ -18,6 +18,8 @@
 
 package org.noise_planet.noisemodelling.scripts.Geometric_Tools
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureSpatialIndex
+
 import groovy.sql.Sql
 import groovy.text.SimpleTemplateEngine
 import groovy.transform.CompileStatic
@@ -209,6 +211,7 @@ def exec(Connection connection, input) {
 
     // If no SRID provided, the one from DEM layer is applied
     Integer srid = 0
+    ensureSpatialIndex(connection, logger, inputRail)
     if ('inputSRID' in input) {
         srid = input["inputSRID"] as Integer
     }

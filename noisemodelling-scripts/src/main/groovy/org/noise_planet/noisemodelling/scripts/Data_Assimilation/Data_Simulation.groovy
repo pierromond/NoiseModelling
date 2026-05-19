@@ -16,6 +16,8 @@
 
 package org.noise_planet.noisemodelling.scripts.Data_Assimilation
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureIndex
+
 import groovy.sql.Sql
 import org.h2gis.utilities.SpatialResultSet
 import org.h2gis.utilities.wrapper.ConnectionWrapper
@@ -56,6 +58,7 @@ def exec(Connection connection,input) {
     Logger logger = LoggerFactory.getLogger("org.noise_planet.noisemodelling")
     logger.info('Start Data simulation ')
     Sql sql = new Sql(connection)
+    ensureIndex(connection, sql, logger, "ALL_CONFIGURATIONS", "IT")
     Integer limit = null
     if (input!=[]) limit = input['noiseMapLimit'] as Integer // limit the number of maps to be generated
 

@@ -17,6 +17,8 @@
 
 package org.noise_planet.noisemodelling.scripts.Dynamic
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureSpatialIndex
+
 import groovy.sql.Sql
 import groovy.time.TimeCategory
 import org.h2gis.utilities.GeometryTableUtilities
@@ -30,6 +32,8 @@ import org.locationtech.jts.geom.*
 import org.noise_planet.noisemodelling.emission.road.cnossosvar.RoadVehicleCnossosvar
 import org.noise_planet.noisemodelling.emission.road.cnossosvar.RoadVehicleCnossosvarParameters
 import org.noise_planet.noisemodelling.jdbc.utils.DataBaseUtilities
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.sql.SQLException
 
@@ -95,6 +99,7 @@ def exec(Connection connection, Map input) {
 
     // output string, the information given back to the user
     String resultString = null
+    Logger logger = LoggerFactory.getLogger("org.noise_planet.noisemodelling")
 
     // print to command window
     System.out.println('Start ')
@@ -132,6 +137,8 @@ def exec(Connection connection, Map input) {
         throw new SQLException("Table table $nameAndIndex does not contain a primary key")
     }
     String primaryKeyColumnName = nameAndIndex.first()
+
+    ensureSpatialIndex(connection, logger, tableSourceGeom)
 
     VehicleEmissionProcessData vehicleEmissionProcessData = new VehicleEmissionProcessData();
     vehicleEmissionProcessData.setDynamicEmissionTable(vehicles_table_name, sql, tableFormat)

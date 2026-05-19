@@ -16,11 +16,15 @@
 
 package org.noise_planet.noisemodelling.scripts.Data_Assimilation
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureIndex
+
 import groovy.sql.Sql
 import groovy.transform.CompileStatic
 import org.h2gis.utilities.JDBCUtilities
 import org.h2gis.utilities.wrapper.ConnectionWrapper
 import java.sql.Connection
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 title = 'Creation of the result table'
 description = 'Creates the ASSIMILATED_MAPS table by joining the best configuration table with the receivers noise levels.'
@@ -61,6 +65,11 @@ def exec(Connection connection,inputs) {
     String outputTable = inputs['outputTable'] as String
 
     Sql sql = new Sql(connection)
+        Logger logger = LoggerFactory.getLogger("org.noise_planet.noisemodelling")
+
+        ensureIndex(connection, sql, logger, receiverLevel, "PERIOD")
+        ensureIndex(connection, sql, logger, bestConfigTable, "IT")
+
     // Add Timestamp to the NMs
     sql.execute("DROP TABLE "+outputTable+" IF EXISTS;")
     sql.execute("CREATE TABLE "+outputTable+" AS SELECT b.EPOCH TIMESTAMP, a.LAEQ, a.THE_GEOM, a.IDRECEIVER FROM "+bestConfigTable+" b  LEFT JOIN "+receiverLevel+" a ON a.PERIOD = b.IT;")

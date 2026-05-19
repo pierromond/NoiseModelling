@@ -94,7 +94,7 @@ class TestDataAssimilation extends JdbcTestCase {
               "delta": 20
         ])
 
-        new Merged_Sensors_Receivers().exec(connection,[
+        new Merge_Sensors_Receivers().exec(connection,[
                 "tableReceivers": "RECEIVERS",
                 "tableSensors" : "SENSORS_LOCATION"
         ])

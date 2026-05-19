@@ -15,6 +15,8 @@
 
 package org.noise_planet.noisemodelling.scripts.Experimental
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureIndex
+
 
 
 import groovy.sql.Sql
@@ -75,11 +77,6 @@ outputs = [
         ]
 ]
 
-
-
-
-
-
 // main function of the script
 def exec(Connection connection, input) {
 
@@ -102,6 +99,11 @@ def exec(Connection connection, input) {
     }
 
     String outTable = input['outTable']
+
+        ensureIndex(connection, sql, logger, mainMapTable, "IDRECEIVER")
+        ensureIndex(connection, sql, logger, mainMapTable, "TIMESTRING")
+        ensureIndex(connection, sql, logger, secondMapTable, "IDRECEIVER")
+        ensureIndex(connection, sql, logger, secondMapTable, "TIMESTRING")
 
     sql.execute(String.format("DROP TABLE IF EXISTS %s", outTable))
 

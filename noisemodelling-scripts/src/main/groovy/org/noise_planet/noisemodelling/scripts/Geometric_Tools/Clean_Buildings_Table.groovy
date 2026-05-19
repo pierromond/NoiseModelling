@@ -17,6 +17,8 @@
 
 package org.noise_planet.noisemodelling.scripts.Geometric_Tools
 
+import static org.noise_planet.noisemodelling.utils.IndexUtilities.ensureSpatialIndex
+
 import groovy.sql.Sql
 import org.h2gis.utilities.GeometryTableUtilities
 import org.h2gis.utilities.JDBCUtilities
@@ -84,6 +86,8 @@ def exec(Connection connection, input) {
     int srid = GeometryTableUtilities.getSRID(connection, TableLocation.parse(building_table_name))
     if (!DataBaseUtilities.isSridMetric(connection, srid)) throw new IllegalArgumentException("Error : This SRID is not metric. Please use another SRID for your table.")
     if (srid == 0) throw new IllegalArgumentException("Error : The table does not have an associated SRID.")
+
+        ensureSpatialIndex(connection, logger, building_table_name)
 
 
     Boolean hasPop = JDBCUtilities.hasField(connection, building_table_name, "POP")
